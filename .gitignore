@@ -1,0 +1,68 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.eggs/
+build/
+dist/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Test and lint artifacts
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# IDE and operating system
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local databases
+*.sqlite
+*.sqlite3
+*.db
+chroma.sqlite3
+
+# Candidate documents: never commit real resumes
+*.pdf
+*.doc
+*.docx
+
+# Candidate data directories
+data/incoming/*
+!data/incoming/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/chroma/*
+!data/chroma/.gitkeep
+
+# Logs and generated reports
+*.log
+logs/*
+!logs/.gitkeep
+reports/
+*.tmp
+*.temp
+*.bak
