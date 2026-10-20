@@ -32,9 +32,10 @@ def test_absolute_paths_are_preserved() -> None:
 def test_settings_are_cached() -> None:
     get_settings.cache_clear()
 
-    first = get_settings()
-    second = get_settings()
+    try:
+        first = get_settings()
+        second = get_settings()
 
-    assert first is second
-
-    get_settings.cache_clear()
+        assert first is second
+    finally:
+        get_settings.cache_clear()
