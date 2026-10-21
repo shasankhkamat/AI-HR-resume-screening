@@ -81,7 +81,7 @@ def _urllib_transport(url: str, body: bytes, timeout: float) -> tuple[int, bytes
         raise (reason if isinstance(reason, OSError) else OSError("connection failed")) from None
 
 
-def _parse_base_url(base_url: str) -> str:
+def parse_base_url(base_url: str) -> str:
     message = "OLLAMA_BASE_URL must be an http or https address such as http://localhost:11434."
     try:
         parts = urlsplit(base_url.strip())
@@ -107,7 +107,7 @@ def base_url_is_local(base_url: str) -> bool:
     return host is not None and host.lower() in _LOCAL_HOSTS
 
 
-def _is_cloud_model(model: str) -> bool:
+def is_cloud_model(model: str) -> bool:
     lowered = model.lower()
     return lowered.endswith(("-cloud", ":cloud"))
 
@@ -126,11 +126,11 @@ class OllamaClient:
         transport: Transport | None = None,
         sleep: Sleep = time.sleep,
     ) -> None:
-        self.base_url = _parse_base_url(base_url)
+        self.base_url = parse_base_url(base_url)
         self.model = model.strip()
         if not self.model:
             raise LLMConfigError("LLM_MODEL is not set.")
-        if _is_cloud_model(self.model):
+        if is_cloud_model(self.model):
             raise LLMConfigError(
                 "LLM_MODEL looks like an Ollama cloud model. Cloud models run on remote servers, "
                 "so resume text would leave this computer. Use a model downloaded to this machine."
@@ -166,34 +166,57 @@ class OllamaClient:
         return _extract_content(raw)
 
     def _send(self, body: bytes) -> bytes:
-        """Send the request, retrying transient failures a bounded number of times."""
-        attempts = self.max_retries + 1
-        for attempt in range(1, attempts + 1):
-            error: LLMError
-            try:
-                status, raw = self._transport(self._url, body, self.timeout_seconds)
-            except TimeoutError:
-                error, transient = LLMTimeoutError("The model server did not answer in time."), True
-            except ConnectionRefusedError:
-                raise LLMConnectionError(_NOT_REACHABLE) from None
-            except (ConnectionResetError, ConnectionAbortedError, http.client.HTTPException):
-                error, transient = LLMConnectionError(_CONNECTION_LOST), True
-            except OSError:
-                raise LLMConnectionError(_NOT_REACHABLE) from None
-            else:
-                if status == 200:
-                    return raw
-                error, transient = _status_error(status, raw)
-            if not transient or attempt == attempts:
-                raise error from None
-            logger.warning(
-                "Model server request failed (%s); retry %d of %d",
-                type(error).__name__,
-                attempt,
-                self.max_retries,
-            )
-            self._sleep(_BACKOFF_SECONDS * attempt)
-        raise LLMError("The model request failed.")  # pragma: no cover - loop always returns
+        return send_with_retries(
+            self._transport,
+            self._url,
+            body,
+            timeout_seconds=self.timeout_seconds,
+            max_retries=self.max_retries,
+            sleep=self._sleep,
+        )
+
+
+def send_with_retries(
+    transport: Transport,
+    url: str,
+    body: bytes,
+    *,
+    timeout_seconds: float,
+    max_retries: int,
+    sleep: Sleep,
+) -> bytes:
+    """POST ``body`` and return the reply body, retrying transient failures a bounded number
+    of times. Errors use fixed messages, and provider exceptions are never chained.
+
+    Shared by the chat client and the embedding client, so both behave the same way.
+    """
+    attempts = max_retries + 1
+    for attempt in range(1, attempts + 1):
+        error: LLMError
+        try:
+            status, raw = transport(url, body, timeout_seconds)
+        except TimeoutError:
+            error, transient = LLMTimeoutError("The model server did not answer in time."), True
+        except ConnectionRefusedError:
+            raise LLMConnectionError(_NOT_REACHABLE) from None
+        except (ConnectionResetError, ConnectionAbortedError, http.client.HTTPException):
+            error, transient = LLMConnectionError(_CONNECTION_LOST), True
+        except OSError:
+            raise LLMConnectionError(_NOT_REACHABLE) from None
+        else:
+            if status == 200:
+                return raw
+            error, transient = _status_error(status, raw)
+        if not transient or attempt == attempts:
+            raise error from None
+        logger.warning(
+            "Model server request failed (%s); retry %d of %d",
+            type(error).__name__,
+            attempt,
+            max_retries,
+        )
+        sleep(_BACKOFF_SECONDS * attempt)
+    raise LLMError("The model request failed.")  # pragma: no cover - loop always returns
 
 
 def _status_error(status: int, raw: bytes) -> tuple[LLMError, bool]:

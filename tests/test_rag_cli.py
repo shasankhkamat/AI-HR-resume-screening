@@ -92,8 +92,15 @@ def test_lexical_is_accepted():
     assert args.rag == "lexical"
 
 
-@pytest.mark.parametrize("mode", ["semantic", "embeddings", "LEXICAL", ""])
-def test_other_modes_are_rejected_for_now(mode, capsys):
+def test_semantic_is_accepted():
+    args = main_module._build_parser().parse_args(
+        ["--resume", "a.pdf", "--job-text", "x", "--rag", "semantic"]
+    )
+    assert args.rag == "semantic"
+
+
+@pytest.mark.parametrize("mode", ["embeddings", "hybrid", "LEXICAL", "SEMANTIC", ""])
+def test_unknown_modes_are_rejected(mode, capsys):
     with pytest.raises(SystemExit) as caught:
         main_module._build_parser().parse_args(
             ["--resume", "a.pdf", "--job-text", "x", "--rag", mode]

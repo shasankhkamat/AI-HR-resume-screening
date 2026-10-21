@@ -10,7 +10,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from hr_screening.config import get_settings
+from hr_screening.config import Settings, get_settings
 from hr_screening.errors import InvalidJobDescriptionError, LLMConfigError, ScreeningError
 from hr_screening.evaluation.formatting import format_report_text
 from hr_screening.llm.base import LLMClient
@@ -19,6 +19,8 @@ from hr_screening.llm.ollama_client import base_url_is_local
 from hr_screening.logging_config import configure_logging
 from hr_screening.models.report import ScreeningReport
 from hr_screening.pipeline import screen_resume
+from hr_screening.rag.embeddings import Embedder
+from hr_screening.rag.factory import build_embedder
 
 MAX_JOB_FILE_BYTES = 200_000
 
@@ -44,11 +46,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--rag",
-        choices=["lexical"],
+        choices=["lexical", "semantic"],
         help=(
-            "Opt in to listing resume passages for each requirement, found by local keyword "
-            "search. No network is used. Passages are for human review and do not change any "
-            "status or the score."
+            "Opt in to listing resume passages for each requirement, for human review. "
+            "'lexical' is a local keyword search and uses no network. 'semantic' ranks "
+            "passages with an Ollama embedding model (see EMBEDDING_MODEL) and sends resume "
+            "text to that server. Passages do not change any status or the score."
         ),
     )
     return parser
@@ -66,20 +69,37 @@ def _invalid_settings_message(exc: ValidationError) -> str:
     return f"Invalid value for: {', '.join(names)}. Check your environment variables or .env."
 
 
-def _build_client() -> LLMClient:
-    """Build the LLM client from settings. Configuration problems raise LLMConfigError."""
+def _settings() -> Settings:
+    """The application settings. An invalid value raises LLMConfigError naming the setting."""
     try:
-        settings = get_settings()
+        return get_settings()
     except ValidationError as exc:
         raise LLMConfigError(_invalid_settings_message(exc)) from None
-    client = build_llm_client(settings)
+
+
+def _warn_if_remote(settings: Settings) -> None:
     if not base_url_is_local(settings.ollama_base_url):
         print(
             "Warning: OLLAMA_BASE_URL is not a local address. "
             "Resume text will be sent to that server.",
             file=sys.stderr,
         )
+
+
+def _build_client() -> LLMClient:
+    """Build the LLM client from settings. Configuration problems raise LLMConfigError."""
+    settings = _settings()
+    client = build_llm_client(settings)
+    _warn_if_remote(settings)
     return client
+
+
+def _build_embedder() -> Embedder:
+    """Build the embedder from settings. Configuration problems raise LLMConfigError."""
+    settings = _settings()
+    embedder = build_embedder(settings)
+    _warn_if_remote(settings)
+    return embedder
 
 
 def _read_job_file(path: str) -> str:
@@ -113,8 +133,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         job_text = args.job_text if args.job_text is not None else _read_job_file(args.job_file)
         client = _build_client() if args.llm else None
+        embedder = _build_embedder() if args.rag == "semantic" else None
         report = screen_resume(
-            args.resume, job_text, client=client, base_dir=args.resume_dir, rag_mode=args.rag
+            args.resume,
+            job_text,
+            client=client,
+            base_dir=args.resume_dir,
+            rag_mode=args.rag,
+            embedder=embedder,
         )
     except ScreeningError as exc:
         print(f"Error: {exc}", file=sys.stderr)

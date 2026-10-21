@@ -41,7 +41,7 @@ class RetrievedPassage(BaseModel):
     ``text == resume_text[start:end]``. A passage is not evidence that a requirement is met:
     it can be a negated or aspirational mention, or it can be related text found through an
     alias or a related skill. ``score`` ranks passages for one requirement and is not a
-    measure of skill.
+    measure of skill. Its scale depends on the method (see ``RequirementRetrieval.method``).
     """
 
     start: int = Field(ge=0)
@@ -68,6 +68,8 @@ class RequirementRetrieval(BaseModel):
     kind: RequirementKind
     passages: list[RetrievedPassage] = Field(default_factory=list)
     note: str | None = None
+    # Scores are not comparable between methods: lexical is BM25, semantic is cosine similarity.
+    method: Literal["lexical", "semantic"] = "lexical"
 
 
 class ScreeningReport(BaseModel):

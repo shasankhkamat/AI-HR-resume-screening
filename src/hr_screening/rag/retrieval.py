@@ -10,12 +10,14 @@ score are decided elsewhere and are not changed by anything in this module.
 """
 
 from dataclasses import dataclass
+from typing import Literal, Protocol
 
 from hr_screening.extraction.mentions import MentionKind, find_skill_mentions
 from hr_screening.rag.chunking import (
     DEFAULT_MAX_CHARS,
     DEFAULT_MAX_CHUNKS,
     DEFAULT_OVERLAP_CHARS,
+    Chunk,
     chunk_text,
 )
 from hr_screening.rag.lexical import Hit, LexicalIndex, skill_query, text_query
@@ -44,8 +46,22 @@ class Passage:
     mention_kinds: tuple[MentionKind, ...] = ()
 
 
+class Retriever(Protocol):
+    """What the pipeline needs from a retriever. Keyword and semantic retrievers both fit."""
+
+    method: Literal["lexical", "semantic"]
+    chunks: tuple[Chunk, ...]
+    truncated: bool
+
+    def for_skill(self, skill: str, top_k: int = DEFAULT_TOP_K) -> list[Passage]: ...
+
+    def for_text(self, text: str, top_k: int = DEFAULT_TOP_K) -> list[Passage]: ...
+
+
 class LexicalRetriever:
     """Chunks one resume once and answers queries against it. Everything stays in memory."""
+
+    method: Literal["lexical", "semantic"] = "lexical"
 
     def __init__(
         self,
@@ -65,14 +81,15 @@ class LexicalRetriever:
     def for_skill(self, skill: str, top_k: int = DEFAULT_TOP_K) -> list[Passage]:
         """Passages about a skill, its aliases and related skills."""
         hits = self._index.search(skill_query(skill), top_k)
-        return [_passage(hit, skill) for hit in hits]
+        return [passage_from_hit(hit, skill) for hit in hits]
 
     def for_text(self, text: str, top_k: int = DEFAULT_TOP_K) -> list[Passage]:
         """Passages that share words with ``text`` (a degree, a certification, a duty)."""
-        return [_passage(hit, None) for hit in self._index.search(text_query(text), top_k)]
+        return [passage_from_hit(hit, None) for hit in self._index.search(text_query(text), top_k)]
 
 
-def _passage(hit: Hit, skill: str | None) -> Passage:
+def passage_from_hit(hit: Hit, skill: str | None) -> Passage:
+    """A passage for a search hit. For a skill, say how the skill itself is mentioned."""
     chunk = hit.chunk
     kinds = tuple(m.kind for m in find_skill_mentions(chunk.text, skill)) if skill else ()
     return Passage(

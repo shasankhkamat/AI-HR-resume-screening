@@ -1,11 +1,12 @@
 """Turn requirement assessments into retrieval queries and report entries.
 
-For each assessment the retriever finds resume passages for a human to read. Nothing here
-changes a status or the score, and a retrieved passage never counts as evidence by itself.
+For each assessment the retriever (keyword or semantic) finds resume passages for a human
+to read. Nothing here changes a status or the score, and a retrieved passage never counts as
+evidence by itself.
 
 How each kind of requirement is searched:
-- Required and preferred skills: the skill, its aliases and (at lower weight) the related
-  skills the evaluator already knows about.
+- Required and preferred skills: the skill and its aliases (keyword search also uses the
+  related skills the evaluator already knows about, at lower weight).
 - Certifications: the words of the requirement.
 - Education: a fixed set of degree words plus the requested level.
 - Experience: not searched. A keyword query for "years of experience" would match any
@@ -21,7 +22,7 @@ from hr_screening.models.report import (
     RequirementRetrieval,
     RetrievedPassage,
 )
-from hr_screening.rag.retrieval import DEFAULT_TOP_K, LexicalRetriever, Passage
+from hr_screening.rag.retrieval import DEFAULT_TOP_K, Passage, Retriever
 
 EXPERIENCE_NOTE = (
     "Not searched. The dated roles above are the evidence for years of experience, and a "
@@ -33,7 +34,7 @@ _SKILL_KINDS = (RequirementKind.REQUIRED_SKILL, RequirementKind.PREFERRED_SKILL)
 
 
 def retrieve_for_assessments(
-    retriever: LexicalRetriever,
+    retriever: Retriever,
     assessments: Sequence[RequirementAssessment],
     top_k: int = DEFAULT_TOP_K,
 ) -> list[RequirementRetrieval]:
@@ -42,12 +43,15 @@ def retrieve_for_assessments(
 
 
 def _retrieve_one(
-    retriever: LexicalRetriever, assessment: RequirementAssessment, top_k: int
+    retriever: Retriever, assessment: RequirementAssessment, top_k: int
 ) -> RequirementRetrieval:
     kind = assessment.kind
     if kind is RequirementKind.EXPERIENCE:
         return RequirementRetrieval(
-            requirement=assessment.requirement, kind=kind, note=EXPERIENCE_NOTE
+            requirement=assessment.requirement,
+            kind=kind,
+            note=EXPERIENCE_NOTE,
+            method=retriever.method,
         )
     if kind in _SKILL_KINDS:
         passages = retriever.for_skill(assessment.requirement, top_k)
@@ -59,6 +63,7 @@ def _retrieve_one(
         requirement=assessment.requirement,
         kind=kind,
         passages=[to_report_passage(passage) for passage in passages],
+        method=retriever.method,
     )
 
 

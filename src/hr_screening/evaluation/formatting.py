@@ -15,12 +15,24 @@ _RETRIEVAL_INTRO = (
     "Found by keyword search. A passage is not evidence that a requirement is met, and it does "
     "not change any status or the score. Read each one yourself."
 )
+_SEMANTIC_INTRO = (
+    "Found by semantic search: passages are ranked by embedding similarity (higher is closer). "
+    "This can match related wording and can also match unrelated text. A passage is not "
+    "evidence that a requirement is met, and it does not change any status or the score. "
+    "Read each one yourself."
+)
 _NO_PASSAGE = "No matching passage found. This does not show that the candidate lacks it."
 
 
 def _retrieval_lines(report: ScreeningReport) -> list[str]:
-    lines = ["", "RETRIEVED PASSAGES (for review)", _RETRIEVAL_INTRO]
+    methods = {entry.method for entry in report.retrieval}
+    lines = ["", "RETRIEVED PASSAGES (for review)"]
+    if "lexical" in methods:
+        lines.append(_RETRIEVAL_INTRO)
+    if "semantic" in methods:
+        lines.append(_SEMANTIC_INTRO)
     for entry in report.retrieval:
+        score_label = "similarity" if entry.method == "semantic" else "relevance"
         lines.append(f"[{_KIND_LABELS[entry.kind]}] {entry.requirement}")
         if entry.note:
             lines.append(f"    {entry.note}")
@@ -30,7 +42,7 @@ def _retrieval_lines(report: ScreeningReport) -> list[str]:
             facts = [
                 passage.section or "no section",
                 f"chars {passage.start}-{passage.end}",
-                f"relevance {passage.score:.2f}",
+                f"{score_label} {passage.score:.2f}",
             ]
             if passage.mention_kinds:
                 kinds = ", ".join(dict.fromkeys(passage.mention_kinds))

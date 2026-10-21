@@ -54,3 +54,7 @@ class LLMConnectionError(LLMError):
 
 class LLMModelNotFoundError(LLMError):
     """The configured model is not installed on the model server."""
+
+
+class EmbeddingError(LLMError):
+    """The embedding model returned vectors that cannot be used."""
