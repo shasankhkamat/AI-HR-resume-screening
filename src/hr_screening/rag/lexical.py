@@ -20,6 +20,9 @@ from hr_screening.rag.chunking import Chunk
 
 RELATED_WEIGHT = 0.5
 _TOKEN = re.compile(r"[^\W_]+(?:[+#]+)?")  # letters and digits, keeping c++ and c#
+# Letters followed by a version number, like python3. The evaluator accepts a version after a
+# skill name, so the index drops it too. k8s, s3 and x86 do not match and stay as they are.
+_VERSIONED = re.compile(r"([^\W\d_]{2,})\d+")
 _STOPWORDS = frozenset(
     {"a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in", "is", "it"}
     | {"of", "on", "or", "the", "to", "was", "were", "with"}
@@ -38,6 +41,9 @@ def tokenize(text: str) -> list[str]:
     tokens = []
     for match in _TOKEN.finditer(text.casefold()):
         token = match.group(0)
+        versioned = _VERSIONED.fullmatch(token)
+        if versioned:
+            token = versioned.group(1)
         if len(token) > 1 and token not in _STOPWORDS:
             tokens.append(_stem(token))
     return tokens

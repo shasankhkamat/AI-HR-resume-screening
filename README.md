@@ -1,9 +1,23 @@
 ﻿# AI HR Resume Screening
 
-An explainable screening MVP. It takes one PDF or DOCX resume and one job description and
+An explainable screening tool. It takes one PDF or DOCX resume and one job description and
 prints a report: each requirement is marked supported, partial, not found or unverified,
 with the exact resume line that supports it. It supports human review. It does not make
 hiring decisions.
+
+## Setup
+
+Python 3.11 or newer.
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
+```
+
+This installs the package with its three dependencies (pydantic, pydantic-settings and pypdf),
+the dev tools (pytest and ruff) and a `hr-screening` command. The examples below use
+`python -m hr_screening.main`, which does the same thing.
 
 ## Status
 
@@ -17,13 +31,16 @@ Implemented and tested:
 - Weighted requirement coverage score
 - Optional extraction with a local Ollama model (opt in with `--llm`), with verification of
   the model output and a rule based fallback
+- Optional list of resume passages for each requirement, for a reviewer to read: keyword
+  search (`--rag lexical`) or embedding search with a local Ollama model (`--rag semantic`)
+- A small synthetic check of the retrieval (`evals/`)
 - A pipeline, a command line tool, pytest tests and Ruff
 
 Not implemented (future work):
 
 - Hosted LLM providers. Only a local Ollama server is supported.
-- RAG, embeddings or semantic retrieval. One resume and one job description fit in one prompt.
-  RAG becomes useful for searching a pool of many resumes.
+- A vector database. Embeddings are computed for each run and kept in memory.
+- Searching a pool of many resumes. The tool handles one resume at a time.
 - OCR for scanned PDFs
 - Any fairness, bias or compliance guarantee. No such testing has been done.
 
@@ -35,11 +52,21 @@ job text    -> extraction.job_parser -> JobRequirements
 resume text -> extraction.resume_parser (rules)  or  llm.extractor (optional, verified)
                 -> CandidateProfile
 evaluation.evaluator -> ScreeningReport (status + evidence + score + limitations)
+
+with --rag, after the report is built:
+resume text -> rag.chunking -> chunks (exact slices of the text, split at section headings)
+            -> rag.retrieval (keyword, BM25)   or   rag.semantic (embeddings, cosine)
+            -> report.retrieval: passages for each requirement
 ```
 
 With `--llm`, `llm.factory` builds an `OllamaClient` from the settings. The client implements
 the small `LLMClient` interface (`complete(system_prompt, user_prompt) -> str`) and only
 returns the model's text. Parsing, validation and the evidence checks stay in `llm.extractor`.
+
+With `--rag semantic`, `rag.factory` builds an `OllamaEmbedder` that implements the small
+`Embedder` interface (`embed(texts) -> vectors`). It shares its HTTP code and retry rules with
+the chat client. Retrieval runs after the report is built and only adds the `retrieval` field
+and one line in the limitations. It cannot change a status or the score.
 
 ## Run it
 
@@ -50,22 +77,151 @@ python docs\make_sample_resume.py
 python -m hr_screening.main --resume data\incoming\sample_resume.docx --job-text "Requirements`n- 3+ years of experience`n- Python and SQL`n- Bachelor's degree"
 ```
 
-LLM mode. It needs Ollama and a downloaded model (see the next section).
+LLM mode. It needs Ollama and a downloaded model (see the section on local LLM mode).
 
 ```powershell
 python -m hr_screening.main --resume data\incoming\sample_resume.docx --job-text "Requirements`n- 3+ years of experience`n- Python and SQL`n- Bachelor's degree" --llm
 ```
 
-Options: `--job-file path.txt`, `--json`, `--resume-dir folder`, `--llm`.
-The sample resume is synthetic. Never commit real resumes.
+With retrieved passages. `lexical` needs nothing else. `semantic` needs an embedding model
+(see the next section).
+
+```powershell
+python -m hr_screening.main --resume data\incoming\sample_resume.docx --job-text "Requirements`n- 3+ years of experience`n- Python and SQL`n- Bachelor's degree" --rag lexical
+```
+
+Options: `--job-file path.txt`, `--json`, `--resume-dir folder`, `--llm`,
+`--rag lexical|semantic`. The sample resume is synthetic. Never commit real resumes.
+
+## Retrieved passages (`--rag`)
+
+The report tells you whether a requirement has supporting text. A reviewer still has to read
+the resume to judge it, so `--rag` adds a section that lists the passages most related to each
+requirement, with their position in the resume. It is off by default and it changes nothing
+else: statuses, evidence and the score are the same with or without it, and tests compare them.
+
+Output of the `--rag lexical` command above (shortened):
+
+```text
+RETRIEVED PASSAGES (for review)
+Found by keyword search. A passage is not evidence that a requirement is met, and it does not change any status or the score. Read each one yourself.
+[required skill] python
+    Passage 1 (skills; chars 0-50; relevance 1.51; skill mentioned as: affirmative)
+        | SKILLS
+        | Python, SQL, Pandas, scikit-learn, Power BI
+[experience] 3+ years of experience
+    Not searched. The dated roles above are the evidence for years of experience, and a keyword search would match any sentence that contains the word experience.
+[education] Bachelor level education or higher
+    Passage 1 (education; chars 205-266; relevance 3.18)
+        | EDUCATION
+        | B.Tech in Computer Science, Example Institute, 2018
+```
+
+The sample resume is only 359 characters, so each search has one or two passages to choose
+from. The section is more useful on a resume of normal length.
+
+### What a passage is
+
+- **An exact slice of the resume.** `text == resume[start:end]`, with the offsets shown. Before
+  the report is returned, every passage is checked against the resume text. If a check fails,
+  the passages are dropped and the report says so.
+- **Not evidence.** A passage is returned because it relates to the requirement, so it can say
+  "no hands on experience with Kubernetes" or "currently learning Spark". For skills the report
+  labels how the skill is mentioned (affirmative, negated or aspirational) with the same rules
+  the evaluator uses. The label does not change the status.
+- **Ranked by a score that depends on the mode.** Keyword search shows it as `relevance`
+  (BM25). Semantic search shows it as `similarity` (cosine). The two cannot be compared.
+- **Not a verdict when missing.** "No matching passage found" does not show that the
+  candidate lacks the skill.
+
+At most three passages are listed for each requirement. How each kind is searched:
+
+| Requirement | Query |
+|---|---|
+| Required or preferred skill | The skill and its aliases. Keyword search also uses the related skills from the built in list, at lower weight |
+| Certification | The words of the requirement |
+| Education | A fixed set of degree words plus the requested level |
+| Years of experience | Not searched. A keyword query for "experience" would match any sentence with that word, including negated ones, and the evaluator already cites the dated roles |
+
+With `--json`, the report gets a `retrieval` list. Each entry has the requirement, its passages
+and `method` (`lexical` or `semantic`). Without retrieval the key is absent, so the default
+JSON is the same as before.
+
+### Why there are two modes
+
+Keyword search is the dependable default. It is deterministic, it needs no model and no
+network, and it can say why a passage was chosen (the matched words are in the JSON). Its
+weakness is that it only sees words. In the synthetic check it found nothing for `forecasting`
+on a resume that says "Predicted monthly demand with ARIMA models".
+
+Semantic search embeds the passages and the requirement and ranks by cosine similarity, so it
+can connect different words. That is the reason it is there. The costs: it needs an Ollama
+embedding model, it sends the resume text and the requirement queries to the Ollama server,
+and it always has a nearest passage, so it can show text that is unrelated and give low scores
+to a skill that is not in the resume. Whether it ranks better than keyword search on real
+resumes has not been measured. Keyword search stays the default and the baseline to compare
+against.
+
+### Keyword search (`--rag lexical`)
+
+A small BM25 index over the chunks, written with the standard library only. Words are lower
+cased and plural s is dropped. A version number after a word is dropped too, so `Python3`
+matches `python`, as it does in the evaluator. Skill queries use the same alias and related
+skill lists as the evaluator. It makes no network request and reads no settings.
+
+### Semantic search (`--rag semantic`)
+
+The chunks of the resume are embedded in batches of 8 with Ollama's `/api/embed`, and each
+requirement is embedded with one more call. Passages are ranked by cosine similarity and ties
+keep the earlier passage first. Only passages with a similarity above 0 are listed. Vectors are
+kept in memory for one run and are never written to disk. A resume with no text sends nothing.
+
+### Set up semantic search
+
+1. Install Ollama as described in the next section.
+2. Download an embedding model. No model name is built into this project. Pick one from
+   https://ollama.com/library, then look at the exact name:
+
+```powershell
+   ollama pull <embedding-model>
+   ollama list
+```
+
+3. Set `EMBEDDING_MODEL=<embedding-model>` in `.env`. The server address, timeout and retries
+   are the same settings as for `--llm` (`OLLAMA_BASE_URL`, `LLM_TIMEOUT_SECONDS`,
+   `LLM_MAX_RETRIES`). No chat model and no `LLM_PROVIDER` are needed for embeddings.
+4. Run with `--rag semantic`. Names ending in `-cloud` or `:cloud` are refused, as for chat
+   models.
+
+| Situation | Result |
+|---|---|
+| `EMBEDDING_MODEL` missing, a cloud model name, a bad URL or an invalid setting | Message on screen and exit code 2. No report and no silent fallback |
+| Ollama not running, timeout, model not installed, server error, unusable vectors | Keyword search is used instead. The report says why, for example "Semantic search failed (the model server could not be reached), so keyword search was used instead." |
+| Keyword search also fails | The screening result is returned without passages, with a note |
+
+## Retrieval check on synthetic cases
+
+`evals/run_retrieval_eval.py` runs 22 queries over three invented resumes and prints what was
+found. Keyword search found a correct passage at rank 1 for 17 of 19 answerable queries,
+returned nothing for all 3 absent skills, and labelled both a negated and a learning mention
+correctly. It missed two paraphrases. The cases are tiny and were written by the same
+assistant that wrote the code, so this is a sanity check and not a benchmark. Semantic search
+has not been measured. `docs/retrieval_evaluation.md` has the full output, what the check
+found (one bug, now fixed) and how to run it for semantic search.
+
+```powershell
+python evals\run_retrieval_eval.py
+python evals\run_retrieval_eval.py --semantic
+```
 
 ## Local LLM mode with Ollama
 
 ### What is sent
 
 With `--llm`, the resume text and a fixed set of extraction instructions are sent to the
-Ollama server at `OLLAMA_BASE_URL`. The job description is not sent. Nothing is sent without
-`--llm`.
+Ollama server at `OLLAMA_BASE_URL`. The job description is not sent. Nothing is sent to Ollama
+unless you use `--llm` or `--rag semantic` (see the section on retrieved passages for what that
+sends).
 
 ### 1. Install Ollama
 
@@ -147,6 +303,10 @@ Use only the synthetic sample resume. Never use a real candidate resume.
   configured address. Only `http` and `https` addresses are accepted.
 - Prompts, resume text, model replies and response bodies are never logged or placed in error
   messages. Error messages are fixed text.
+- `--rag semantic` follows the same rules and sends two things to the same server: chunks of
+  the resume text, and short query texts built from the requirements (for example `python`,
+  `scikit-learn, sklearn, scikit learn` or `bachelor degree education university college
+  institute`).
 - The report itself contains resume lines as evidence. Treat the output as sensitive.
 - Local inference has no per request API charge. It does need local compute, disk space and
   model downloads, and it can be slow without a GPU.
@@ -154,7 +314,9 @@ Use only the synthetic sample resume. Never use a real candidate resume.
 ### Accuracy
 
 A model that runs and passes the tests is not a model that is accurate. The automated tests
-use fake servers and prove only that the plumbing and the error handling work. The evidence
+use fake servers and prove only that the plumbing and the error handling work. No test in this
+project calls a real Ollama server, so a working `--llm` or `--rag semantic` run on your
+machine depends on your Ollama install. Check it with the smoke test above. The evidence
 check proves that extracted text exists in the resume. It does not prove the text means what
 the model says. Treat every LLM result as a suggestion for a human reviewer.
 
@@ -166,8 +328,17 @@ ruff check .
 ```
 
 No test needs Ollama, a downloaded model, an API key or the internet. The tests use fake
-transports. A few tests start a tiny HTTP server on 127.0.0.1 inside the test process to
-exercise the real HTTP code. Nothing leaves your computer.
+transports and a fake embedder. A few tests start a tiny HTTP server on 127.0.0.1 inside the
+test process to exercise the real HTTP code, and one test starts Python subprocesses to check
+that results do not depend on hash randomization. Nothing leaves your computer.
+
+What the tests prove: the plumbing, the validation of model output and of vectors, the
+fallbacks and error messages, that passages are exact slices of the resume, and that
+`--rag` never changes a status or the score. What they do not prove: that Ollama's chat or
+`/api/embed` endpoint works on your machine, or that semantic search ranks passages well. The
+fake embedder hashes word counts. It is not a language model and its results mean nothing about
+real embeddings. `tests/test_retrieval_eval.py` also pins the numbers reported in
+`docs/retrieval_evaluation.md`, so the document and the code cannot drift apart unnoticed.
 
 ## How skill matching works
 
@@ -257,5 +428,27 @@ decision, and the report model does not allow this to be turned off.
   fallback.
 - Job requirements are extracted with simple rules. A job line such as "Python not required"
   is still read as requiring Python.
+- Keyword retrieval only matches words, plus the aliases and related skills in the built in
+  list. In the synthetic check it missed `forecasting` against "Predicted monthly demand with
+  ARIMA models" and `a/b testing` against "a controlled test".
+- Semantic retrieval has not been run against a real embedding model here. It always returns
+  the nearest passages, even for a skill that is not in the resume, and the ranking depends on
+  the model. Queries are sent without the prefixes that some embedding models expect.
+- Passages are chunks of up to 500 characters split at section headings, so a passage can
+  include lines that have nothing to do with the requirement. Only the first 200 chunks of a
+  resume are searched, and the report says when a resume was cut.
+- The evaluator gives partial credit for a related skill even when the resume says the skill
+  itself was not used. In the synthetic test resume, "no hands on experience with Kubernetes"
+  plus a Docker line gives Kubernetes a partial status. The retrieved passage shows the
+  negated line next to it. The rule was left as it is. It is one to revisit.
+- `CHROMA_PERSIST_DIR` and `INCOMING_RESUME_DIR` are read into the settings but no code uses
+  them. There is no vector database.
 - An invalid value in `.env` for any setting (for example `LLM_TIMEOUT_SECONDS=abc`) stops
   the program with a clear message, even without `--llm`.
+
+## About this project
+
+This project was built with AI assistance (Claude), in small batches. Each batch added code
+and tests, and the project owner applied, ran and committed them. The tests and the synthetic
+retrieval cases were also written with AI assistance. That means they check that the code does
+what its authors intended. They do not show that it is right on real resumes.
