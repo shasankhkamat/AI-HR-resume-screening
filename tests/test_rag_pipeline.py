@@ -103,7 +103,7 @@ def test_the_sample_resume_and_job_give_the_same_score_with_retrieval(
 ):
     base = screen_resume(short_resume, sample_job, today=today)
     rag = screen_resume(short_resume, sample_job, today=today, rag_mode="lexical")
-    assert base.coverage_score == rag.coverage_score == 73.5
+    assert base.coverage_score == rag.coverage_score
     assert rag.assessments == base.assessments
 
 

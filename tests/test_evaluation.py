@@ -17,11 +17,13 @@ def test_sample_resume_against_sample_job(sample_resume_text, sample_job, today)
     assert statuses["python"] == MatchStatus.SUPPORTED
     assert statuses["sql"] == MatchStatus.SUPPORTED
     assert statuses["tableau"] == MatchStatus.PARTIAL
-    assert statuses["3+ years of experience"] == MatchStatus.SUPPORTED
+    # The job asks for years "in analytics". No role in the sample resume names analytics, so the
+    # years cannot be confirmed as relevant and the item goes to a reviewer.
+    assert statuses["3+ years of experience"] == MatchStatus.UNVERIFIED
     assert statuses["Bachelor level education or higher"] == MatchStatus.SUPPORTED
     assert statuses["Data Engineering certification"] == MatchStatus.UNVERIFIED
     assert statuses["spark"] == MatchStatus.NOT_FOUND
-    assert report.coverage_score == 73.5
+    assert report.coverage_score == 55.9
     assert report.human_review_required is True
 
 

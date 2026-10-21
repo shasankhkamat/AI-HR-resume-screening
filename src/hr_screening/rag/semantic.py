@@ -12,6 +12,10 @@ above ``min_similarity`` (default 0) are returned. For skill requirements each p
 says how the skill itself is mentioned (affirmative, negated or aspirational), exactly as in
 keyword retrieval.
 
+Task prefixes: if the embedder has ``query_prefix`` or ``document_prefix`` attributes, they are
+put in front of the text that is embedded (queries and resume chunks respectively). Both are
+empty by default. The passages that are shown and checked against the resume never include them.
+
 Privacy: when the embedder is an Ollama server, the resume chunks are sent to it. A resume
 with no text sends nothing. Errors never contain resume text.
 """
@@ -27,7 +31,13 @@ from hr_screening.rag.chunking import (
     DEFAULT_OVERLAP_CHARS,
     chunk_text,
 )
-from hr_screening.rag.embeddings import Embedder, dot, unit_vector, validate_vectors
+from hr_screening.rag.embeddings import (
+    Embedder,
+    dot,
+    normalize_prefix,
+    unit_vector,
+    validate_vectors,
+)
 from hr_screening.rag.lexical import Hit
 from hr_screening.rag.retrieval import DEFAULT_TOP_K, Passage, passage_from_hit
 
@@ -58,6 +68,8 @@ class SemanticRetriever:
         max_chunks: int = DEFAULT_MAX_CHUNKS,
         batch_size: int = DEFAULT_BATCH_SIZE,
         min_similarity: float = DEFAULT_MIN_SIMILARITY,
+        query_prefix: str | None = None,
+        document_prefix: str | None = None,
     ) -> None:
         if batch_size < 1:
             raise ValueError("batch_size must be at least 1.")
@@ -68,9 +80,17 @@ class SemanticRetriever:
         self.truncated = result.truncated
         self._embedder = embedder
         self._min_similarity = min_similarity
+        # None means "use what the embedder says", so the pipeline needs no extra arguments.
+        if query_prefix is None:
+            query_prefix = getattr(embedder, "query_prefix", "")
+        if document_prefix is None:
+            document_prefix = getattr(embedder, "document_prefix", "")
+        self._query_prefix = normalize_prefix(query_prefix)
+        self._document_prefix = normalize_prefix(document_prefix)
         self._vectors: list[list[float]] = []
         for start in range(0, len(self.chunks), batch_size):
-            batch = [chunk.text for chunk in self.chunks[start : start + batch_size]]
+            group = self.chunks[start : start + batch_size]
+            batch = [self._document_prefix + chunk.text for chunk in group]
             self._vectors += [unit_vector(vector) for vector in self._embed(batch)]
         self._dimension = len(self._vectors[0]) if self._vectors else 0
         if any(len(vector) != self._dimension for vector in self._vectors):
@@ -103,7 +123,7 @@ class SemanticRetriever:
             raise ValueError("top_k must be at least 1.")
         if not self.chunks:
             return []
-        vector = unit_vector(self._embed([query])[0])
+        vector = unit_vector(self._embed([self._query_prefix + query])[0])
         if len(vector) != self._dimension:
             raise EmbeddingError("The query and passage vectors have different sizes.")
         scored = [(round(dot(vector, v), 9), position) for position, v in enumerate(self._vectors)]

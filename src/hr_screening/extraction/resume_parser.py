@@ -36,14 +36,19 @@ _SECTIONS = {
         "licenses and certifications",
     ),
     "projects": ("projects", "academic projects", "personal projects", "key projects"),
+    # Not work. A skill mentioned only here is not counted as skill evidence.
+    "interests": (
+        "interests",
+        "hobbies",
+        "references",
+        "hobbies and interests",
+        "interests and hobbies",
+    ),
 }
 _OTHER_HEADINGS = (
     "summary",
     "profile",
     "objective",
-    "interests",
-    "hobbies",
-    "references",
     "awards",
     "achievements",
     "publications",
@@ -60,6 +65,10 @@ _RANGE = re.compile(
 _STATED_YEARS = re.compile(
     r"\b(\d{1,2})\s*\+?\s*(?:years?|yrs?)\s+(?:of\s+)?(?:[\w-]+\s+){0,3}?experience",
     re.IGNORECASE,
+)
+# The first years figure of a line in the experience section: '2 years as a Data Analyst'.
+_SECTION_YEARS = re.compile(
+    r"^(\d{1,2})\s*\+?\s*(?:years?|yrs?)\b(?!\s+(?:old|ago))", re.IGNORECASE
 )
 _SKILL_SPLIT = re.compile(r"[,;|\u2022\u00b7\u25cf\u25aa]|\s{2,}")
 
@@ -89,8 +98,17 @@ def parse_resume(text: str, *, today: date | None = None) -> CandidateProfile:
         if stated is not None:
             years, snippet = stated
             source = "stated"
-        elif "experience" not in sections:
-            notes.append("No experience section was found, so years of experience are unknown.")
+        else:
+            stated = _stated_years_in_section(text, sections.get("experience", []))
+            if stated is not None:
+                years, snippet = stated
+                source = "stated"
+            elif "experience" not in sections:
+                notes.append(
+                    "No experience section was found, so years of experience are unknown."
+                )
+            else:
+                notes += _month_notes(sections["experience"])
 
     return CandidateProfile(
         skills=_parse_skills(sections.get("skills", [])),
@@ -113,9 +131,53 @@ def find_stated_years(text: str) -> tuple[float, str] | None:
     return float(match.group(1)), line_at(text, match.start())
 
 
+_SECTION_MONTHS = re.compile(r"^(\d{1,2})\s*(?:months?|mos?)\b", re.IGNORECASE)
+
+
+def _month_notes(lines: list[str]) -> list[str]:
+    """Say so when the experience section states a duration in months. It is not converted."""
+    return [
+        f"The experience section states a duration in months ('{line[:80]}'). Months are not "
+        "converted into years, so this is not counted as years of experience. Read it."
+        for line in lines
+        if _SECTION_MONTHS.match(_strip_bullet(line))
+    ][:3]
+
+
+def _stated_years_in_section(text: str, lines: list[str]) -> tuple[float, str] | None:
+    """Years stated on a line of the experience section, such as '2 years as a Data Analyst'.
+
+    Only a single statement is used. With two or more the total is unclear and nothing is
+    guessed. Months are never turned into years. The snippet is the line as written.
+    """
+    found = []
+    for line in lines:
+        match = _SECTION_YEARS.match(_strip_bullet(line))
+        if match is not None and 0 < int(match.group(1)) <= 50:
+            found.append((float(match.group(1)), line))
+    if len(found) != 1:
+        return None
+    years, line = found[0]
+    position = text.find(line)
+    return (years, line_at(text, position)) if position >= 0 else None
+
+
 def _heading_key(line: str) -> str | None:
     """Return the section key if ``line`` is a section heading, else None."""
     return _HEADINGS.get(line.rstrip(":").strip().lower()) if len(line) <= 40 else None
+
+
+def _labelled(line: str) -> tuple[str, str] | None:
+    """A heading with its text on the same line: 'Skills: Python, SQL'. Returns (key, text).
+
+    The label must start the line, with no bullet, and must be a known heading, so ordinary
+    text with a colon is not taken for a heading. The text after the colon must not be empty.
+    """
+    label, colon, value = line.partition(":")
+    if not colon or not value.strip():
+        return None
+    key = _heading_key(label.strip())
+    return (key, value.strip()) if key is not None else None
 
 
 class SectionIndex:
@@ -126,7 +188,9 @@ class SectionIndex:
         self._names: list[str | None] = []
         offset = 0
         for raw in text.splitlines(keepends=True):
-            key = _heading_key(raw.strip()) if raw.strip() else None
+            line = raw.strip()
+            labelled = _labelled(line) if line else None
+            key = labelled[0] if labelled else (_heading_key(line) if line else None)
             if key is not None:
                 self._starts.append(offset)
                 self._names.append(None if key == "other" else key)
@@ -145,6 +209,11 @@ def _split_sections(text: str) -> dict[str, list[str]]:
         line = raw.strip()
         if not line:
             continue
+        labelled = _labelled(line)
+        if labelled is not None:
+            current = labelled[0]
+            sections.setdefault(current, []).append(labelled[1])
+            continue
         key = _heading_key(line)
         if key is not None:
             current = key
@@ -153,6 +222,7 @@ def _split_sections(text: str) -> dict[str, list[str]]:
         if current is not None:
             sections[current].append(line)
     sections.pop("other", None)
+    sections.pop("interests", None)
     return sections
 
 
@@ -175,6 +245,8 @@ def _parse_skills(lines: list[str]) -> list[str]:
                 line = rest
         for part in _SKILL_SPLIT.split(line):
             item = part.strip(" -\u2013\u2014*\t")
+            if len(item) > 1 and item.endswith(".") and not item.endswith(".."):
+                item = item[:-1].rstrip()  # the full stop that ends a sentence: 'Tableau.'
             key = item.lower()
             if 1 <= len(item) <= 40 and key not in seen:
                 seen.add(key)

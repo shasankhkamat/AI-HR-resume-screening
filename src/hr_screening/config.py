@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     llm_max_output_tokens: int = Field(default=2048, ge=64, le=32768)
 
     embedding_model: str = "your_embedding_model_here"
+    # Optional task prefixes for models that expect them, such as "search_query:" and
+    # "search_document:" for nomic-embed-text. Empty means none.
+    embedding_query_prefix: str = Field(default="", max_length=100)
+    embedding_document_prefix: str = Field(default="", max_length=100)
 
     chroma_persist_dir: Path = Path("data/chroma")
     incoming_resume_dir: Path = Path("data/incoming")

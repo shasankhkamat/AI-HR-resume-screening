@@ -25,4 +25,6 @@ def build_embedder(settings: Settings) -> Embedder:
         model,
         timeout_seconds=settings.llm_timeout_seconds,
         max_retries=settings.llm_max_retries,
+        query_prefix=settings.embedding_query_prefix,
+        document_prefix=settings.embedding_document_prefix,
     )

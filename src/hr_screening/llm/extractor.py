@@ -113,6 +113,34 @@ def _grounded(items: list[str], folded: FoldedText) -> tuple[list[str], int]:
     return kept, dropped
 
 
+def _grounded_lines(items: list[str], folded: FoldedText) -> tuple[list[str], int]:
+    """Like ``_grounded``, but keep the whole resume line that holds each item.
+
+    The model may cut a qualifier out of a degree ('pursuing', 'expected 2027', 'did not
+    complete'). The rule based parser judges the whole line, so this does too. Otherwise the
+    model could turn an unfinished degree into a finished one just by trimming it.
+    """
+    text = folded.text
+    kept: list[str] = []
+    seen: set[str] = set()
+    dropped = 0
+    for item in items:
+        spans = folded.find_spans(item)
+        line = _fit(_whole_lines(text, *spans[0]), _ITEM_LIMIT) if spans else None
+        if line is None:
+            dropped += 1
+        elif normalize(line) not in seen:
+            seen.add(normalize(line))
+            kept.append(line)
+    return kept, dropped
+
+
+def _whole_lines(text: str, start: int, end: int) -> str:
+    """The resume lines that the span touches, exactly as written."""
+    line_end = text.find("\n", end)
+    return text[text.rfind("\n", 0, start) + 1 : len(text) if line_end == -1 else line_end]
+
+
 def _grounded_skills(skills: list[str], resume_text: str) -> tuple[list[str], int]:
     """Keep skills with an affirmative mention and no conflicting negated mention."""
     kept: list[str] = []
@@ -206,7 +234,7 @@ def extract_profile_with_llm(
     payload = parse_payload(raw)
     folded = FoldedText(resume_text)
     skills, dropped = _grounded_skills(payload.skills, resume_text)
-    education_texts, count = _grounded(payload.education, folded)
+    education_texts, count = _grounded_lines(payload.education, folded)
     dropped += count
     certifications, count = _grounded(payload.certifications, folded)
     dropped += count

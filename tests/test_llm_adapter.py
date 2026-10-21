@@ -447,9 +447,10 @@ def test_pipeline_with_adapter_keeps_the_score(
     tmp_path, make_docx, sample_resume_lines, sample_job, today
 ):
     path = make_docx(tmp_path / "cv.docx", sample_resume_lines)
+    rules = screen_resume(path, sample_job, today=today)
     client = make(FakeTransport(ok(json.dumps(VALID))))
     report = screen_resume(path, sample_job, client=client, today=today)
-    assert report.coverage_score == 73.5
+    assert report.coverage_score == rules.coverage_score
     assert LLM_SUCCESS_NOTE in report.limitations
     assert not any("rule based parser was used" in item for item in report.limitations)
 
@@ -472,9 +473,10 @@ def test_pipeline_falls_back_with_a_safe_reason(
     result, reason, tmp_path, make_docx, sample_resume_lines, sample_job, today
 ):
     path = make_docx(tmp_path / "cv.docx", sample_resume_lines)
+    rules = screen_resume(path, sample_job, today=today)
     client = make(FakeTransport(*[result] * 3))
     report = screen_resume(path, sample_job, client=client, today=today)
-    assert report.coverage_score == 73.5
+    assert report.coverage_score == rules.coverage_score
     notes = " ".join(report.limitations)
     assert reason in notes
     assert "rule based parser was used" in notes

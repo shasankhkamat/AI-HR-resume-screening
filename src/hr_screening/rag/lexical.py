@@ -23,6 +23,7 @@ _TOKEN = re.compile(r"[^\W_]+(?:[+#]+)?")  # letters and digits, keeping c++ and
 # Letters followed by a version number, like python3. The evaluator accepts a version after a
 # skill name, so the index drops it too. k8s, s3 and x86 do not match and stay as they are.
 _VERSIONED = re.compile(r"([^\W\d_]{2,})\d+")
+_WORD_FORMS: dict[str, tuple[str, ...]] = {"forecasting": ("forecast", "forecasted")}
 _STOPWORDS = frozenset(
     {"a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in", "is", "it"}
     | {"of", "on", "or", "the", "to", "was", "were", "with"}
@@ -80,7 +81,7 @@ def skill_query(skill: str) -> Query:
     key = skill.strip().lower()
     if not key:
         return Query(())
-    related: list[str] = []
+    related: list[str] = list(_WORD_FORMS.get(key, ()))
     for other in TRANSFERABLE.get(key, ()):
         related += [other, *SKILL_ALIASES.get(other, ())]
     return make_query([key, *SKILL_ALIASES.get(key, ())], related)

@@ -65,8 +65,9 @@ def resume_path(tmp_path, make_docx, sample_resume_lines):
     [LLMTimeoutError("slow"), LLMError("failed"), RuntimeError("boom"), ValueError("bad")],
 )
 def test_any_extraction_failure_falls_back_to_rules(error, resume_path, sample_job, today):
+    rules = screen_resume(resume_path, sample_job, today=today)
     report = screen_resume(resume_path, sample_job, client=FakeLLMClient(error=error), today=today)
-    assert report.coverage_score == 73.5
+    assert report.coverage_score == rules.coverage_score
     assert any(FALLBACK_NOTE in item for item in report.limitations)
 
 
@@ -148,9 +149,10 @@ def test_error_messages_never_echo_the_model_response():
 
 @pytest.mark.parametrize("bad", BAD_RESPONSES)
 def test_malformed_response_falls_back_and_adds_no_claims(bad, resume_path, sample_job, today):
+    rules = screen_resume(resume_path, sample_job, today=today)
     report = screen_resume(resume_path, sample_job, client=FakeLLMClient(bad), today=today)
     assert any(FALLBACK_NOTE in item for item in report.limitations)
-    assert report.coverage_score == 73.5
+    assert report.coverage_score == rules.coverage_score
 
 
 def test_wellformed_but_invented_claims_become_nothing(sample_resume_text, today):

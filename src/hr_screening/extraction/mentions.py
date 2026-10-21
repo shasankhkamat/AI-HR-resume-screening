@@ -38,7 +38,7 @@ _CLAUSE_BREAKERS = frozenset(
 )
 _NEGATION_CUE = re.compile(
     r"(?<![\w'])(?:no|not|never|without|none|nor|cannot|lack|lacks|lacked|lacking|unfamiliar|"
-    r"\w+n't)(?![\w'])(?!\s+(?:only|just|longer|limited|to\s+mention))"
+    r"\w+n't)(?![\w'])(?!\s+(?:only|just|limited|to\s+mention))"
 )
 _ASPIRATION_CUE = re.compile(
     r"\b(?:currently|now|still|actively)\s+(?:\w+\s+)?(?:learning|studying)\b"
@@ -53,7 +53,7 @@ _ASPIRATION_CUE = re.compile(
 )
 _ASPIRATION_START = re.compile(r"^\W*(?:learning|studying)\b")
 _SUFFIX_NEGATED = re.compile(
-    r"^\s*[:\-\u2013\u2014(]\s*(?:no(?!\s+longer)|none|not(?!\s+(?:only|just|limited))|"
+    r"^\s*[:\-\u2013\u2014(]\s*(?:no|none|not(?!\s+(?:only|just|limited))|"
     r"never|n/a|nil)(?![\w'])"
 )
 _SUFFIX_ASPIRATIONAL = re.compile(

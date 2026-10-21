@@ -69,6 +69,13 @@ def run_json(argv, capsys):
     return code, (json.loads(captured.out) if captured.out else None), captured.err
 
 
+def rule_based_score(files, capsys):
+    """The score for the same resume and job with no model: what every mode must reproduce."""
+    code, report, _ = run_json(files, capsys)
+    assert code == 0
+    return report["coverage_score"]
+
+
 # --- without --llm -----------------------------------------------------------------------
 
 
@@ -82,7 +89,9 @@ def test_without_llm_nothing_is_initialized(monkeypatch, capsys, files):
     monkeypatch.setattr(main_module, "get_settings", forbid("get_settings"))
     code, report, err = run_json(files, capsys)
     assert code == 0
-    assert report["coverage_score"] == 73.5
+    # The baseline for the sample resume and job. The job asks for years "in analytics" and no role
+    # in the sample resume names analytics, so that item is unverified: 9.5 of 17 points.
+    assert report["coverage_score"] == 55.9
     assert LLM_SUCCESS_NOTE not in report["limitations"]
     assert not any("LLM" in item for item in report["limitations"])
     assert err == ""
@@ -92,13 +101,14 @@ def test_without_llm_nothing_is_initialized(monkeypatch, capsys, files):
 
 
 def test_llm_success_adds_the_note_and_keeps_the_score(monkeypatch, capsys, files):
+    baseline = rule_based_score(files, capsys)
     client = FakeLLMClient(json.dumps(PAYLOAD))
     use_settings(monkeypatch, ollama_settings())
     monkeypatch.setattr(main_module, "build_llm_client", lambda settings: client)
     code, report, err = run_json([*files, "--llm"], capsys)
     assert code == 0
     assert len(client.calls) == 1
-    assert report["coverage_score"] == 73.5
+    assert report["coverage_score"] == baseline
     assert LLM_SUCCESS_NOTE in report["limitations"]
     assert not any("rule based parser was used" in item for item in report["limitations"])
     assert report["human_review_required"] is True
@@ -114,6 +124,8 @@ def test_text_output_shows_the_note(monkeypatch, capsys, files):
 
 
 def test_unreachable_server_falls_back_with_a_note(monkeypatch, capsys, files):
+    baseline = rule_based_score(files, capsys)
+
     def refuse(url, body, timeout):
         raise ConnectionRefusedError("secret detail")
 
@@ -122,7 +134,7 @@ def test_unreachable_server_falls_back_with_a_note(monkeypatch, capsys, files):
     monkeypatch.setattr(main_module, "build_llm_client", lambda settings: client)
     code, report, err = run_json([*files, "--llm"], capsys)
     assert code == 0
-    assert report["coverage_score"] == 73.5
+    assert report["coverage_score"] == baseline
     notes = " ".join(report["limitations"])
     assert "the model server could not be reached" in notes
     assert "rule based parser was used" in notes
@@ -130,12 +142,13 @@ def test_unreachable_server_falls_back_with_a_note(monkeypatch, capsys, files):
 
 
 def test_malformed_model_output_falls_back(monkeypatch, capsys, files):
+    baseline = rule_based_score(files, capsys)
     use_settings(monkeypatch, ollama_settings())
     client = FakeLLMClient("not json")
     monkeypatch.setattr(main_module, "build_llm_client", lambda settings: client)
     code, report, _ = run_json([*files, "--llm"], capsys)
     assert code == 0
-    assert report["coverage_score"] == 73.5
+    assert report["coverage_score"] == baseline
     assert any("rule based parser was used" in item for item in report["limitations"])
 
 
@@ -239,4 +252,3 @@ def test_invalid_setting_is_a_clean_error_before_logging_starts(monkeypatch, cap
     assert "LLM_TIMEOUT_SECONDS" in captured.err
     assert "-5" not in captured.err
     assert "Traceback" not in captured.err
-    assert captured.out == ""

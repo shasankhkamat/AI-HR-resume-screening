@@ -1,12 +1,14 @@
 """The screening workflow: resume file + job description -> report. Nothing is stored."""
 
 import logging
+from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 from typing import Literal
 
 from hr_screening.errors import (
     EmbeddingError,
+    InvalidExtraSkillError,
     LLMConfigError,
     LLMConnectionError,
     LLMError,
@@ -18,15 +20,18 @@ from hr_screening.errors import (
 from hr_screening.evaluation.evaluator import evaluate
 from hr_screening.extraction.job_parser import parse_job_description
 from hr_screening.extraction.resume_parser import parse_resume
+from hr_screening.extraction.skills_vocab import skill_pattern
 from hr_screening.ingestion.loader import load_resume_text
 from hr_screening.llm.base import LLMClient
 from hr_screening.llm.extractor import extract_profile_with_llm
 from hr_screening.models.candidate import CandidateProfile
+from hr_screening.models.job import JobRequirements
 from hr_screening.models.report import RequirementRetrieval, ScreeningReport
 from hr_screening.rag.embeddings import Embedder
 from hr_screening.rag.requirements import retrieve_for_assessments, verify_traceable
 from hr_screening.rag.retrieval import LexicalRetriever, Retriever
 from hr_screening.rag.semantic import SemanticRetriever
+from hr_screening.textutil import normalize
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +56,10 @@ RETRIEVAL_FAILED_NOTE = (
     "Passage retrieval failed, so this report has no retrieved passages. "
     "The statuses and the score are not affected."
 )
+MAX_EXTRA_SKILLS = 20
+MAX_EXTRA_SKILL_CHARS = 60
+_SHORT_SKILL_CHARS = 2
+_MAX_REQUIRED_SKILLS = 50  # the limit of JobRequirements.required_skills
 _FAILURE_REASONS = (
     (LLMTimeoutError, "the model did not answer in time"),
     (LLMConnectionError, "the model server could not be reached"),
@@ -68,6 +77,89 @@ def _fallback_note(error: LLMError) -> str:
     return "LLM extraction failed, so the rule based parser was used instead."
 
 
+def _clean_extra_skills(extra: Sequence[str]) -> list[str]:
+    """Validated, de-duplicated extra skill names. A bad value is an error, never ignored."""
+    if isinstance(extra, str):
+        raise InvalidExtraSkillError("Extra skills must be given as a list of names.")
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for raw in extra:
+        name = " ".join(str(raw).split())
+        if not name:
+            raise InvalidExtraSkillError("An extra skill is empty.")
+        if len(name) > MAX_EXTRA_SKILL_CHARS:
+            raise InvalidExtraSkillError(
+                f"An extra skill is longer than {MAX_EXTRA_SKILL_CHARS} characters. "
+                "Give a skill name, not a sentence."
+            )
+        key = normalize(name)
+        if key not in seen:
+            seen.add(key)
+            cleaned.append(name)
+    if len(cleaned) > MAX_EXTRA_SKILLS:
+        raise InvalidExtraSkillError(f"More than {MAX_EXTRA_SKILLS} extra skills were given.")
+    return cleaned
+
+
+def _with_extra_skills(requirements: JobRequirements, extra: Sequence[str]) -> JobRequirements:
+    """Add skills named by the person running the screen as required skills.
+
+    They are assessed like any required skill: a whole word match in the resume, with the same
+    negation and learning rules. They are never added to the built in vocabulary. A skill the
+    job already lists as preferred becomes required, because the person asked for it. A line of
+    the job description that names an extra skill is no longer listed as unassessed.
+    """
+    names = _clean_extra_skills(extra)
+    if not names:
+        return requirements
+    keys = {normalize(name) for name in names}
+    already = {normalize(s) for s in requirements.required_skills}
+    added = [name for name in names if normalize(name) not in already]
+    required = [*requirements.required_skills, *added]
+    if len(required) > _MAX_REQUIRED_SKILLS:
+        raise InvalidExtraSkillError("Too many required skills with the extra skills added.")
+    preferred = [s for s in requirements.preferred_skills if normalize(s) not in keys]
+    patterns = [skill_pattern(name) for name in names]
+    unassessed = [
+        line
+        for line in requirements.unassessed_lines
+        if not any(pattern.search(line) for pattern in patterns)
+    ]
+    notes = [
+        *requirements.notes,
+        "Required skills added by the person running the screen (--extra-skill): "
+        f"{', '.join(names)}. They are matched as whole words in the resume text.",
+    ]
+    short = [name for name in names if len(name) <= _SHORT_SKILL_CHARS]
+    if short:
+        notes.append(
+            f"The extra skill(s) {', '.join(short)} are very short, so they can match unrelated "
+            "text. Read the evidence line for each."
+        )
+    return requirements.model_copy(
+        update={
+            "required_skills": required,
+            "preferred_skills": preferred,
+            "unassessed_lines": unassessed,
+            "notes": notes,
+        }
+    )
+
+
+def prepare_requirements(
+    job_description: str, extra_skills: Sequence[str] = ()
+) -> JobRequirements:
+    """Parse a job description and add the extra skills. A batch does this once, not per resume."""
+    return _with_extra_skills(parse_job_description(job_description), extra_skills)
+
+
+def check_rag_options(rag_mode: str | None, embedder: Embedder | None) -> None:
+    if rag_mode is not None and rag_mode not in RAG_MODES:
+        raise ValueError(f"rag_mode must be one of {RAG_MODES} or None.")
+    if rag_mode == "semantic" and embedder is None:
+        raise ValueError("rag_mode 'semantic' needs an embedder.")
+
+
 def screen_resume(
     resume_path: str | Path,
     job_description: str,
@@ -77,6 +169,7 @@ def screen_resume(
     today: date | None = None,
     rag_mode: Literal["lexical", "semantic"] | None = None,
     embedder: Embedder | None = None,
+    extra_skills: Sequence[str] = (),
 ) -> ScreeningReport:
     """Screen one resume against one job description.
 
@@ -88,14 +181,39 @@ def screen_resume(
     ``embedder``) the report also lists resume passages for each requirement. They are added
     after evaluation, so statuses and the score are exactly the same as without them. If
     semantic search fails, keyword search is used and the report says so.
-    """
-    if rag_mode is not None and rag_mode not in RAG_MODES:
-        raise ValueError(f"rag_mode must be one of {RAG_MODES} or None.")
-    if rag_mode == "semantic" and embedder is None:
-        raise ValueError("rag_mode 'semantic' needs an embedder.")
-    resume_text = load_resume_text(resume_path, base_dir=base_dir)
-    requirements = parse_job_description(job_description)
 
+    ``extra_skills`` are additional required skills named by the person running the screen. They
+    are assessed for this run only. Lines of the job description that no rule could assess are
+    listed in ``report.unassessed_requirements``, and the score is then flagged as incomplete.
+    """
+    check_rag_options(rag_mode, embedder)
+    resume_text = load_resume_text(resume_path, base_dir=base_dir)
+    requirements = prepare_requirements(job_description, extra_skills)
+    return screen_text(
+        resume_text,
+        requirements,
+        client=client,
+        today=today,
+        rag_mode=rag_mode,
+        embedder=embedder,
+    )
+
+
+def screen_text(
+    resume_text: str,
+    requirements: JobRequirements,
+    *,
+    client: LLMClient | None = None,
+    today: date | None = None,
+    rag_mode: Literal["lexical", "semantic"] | None = None,
+    embedder: Embedder | None = None,
+) -> ScreeningReport:
+    """Screen resume text that is already loaded against requirements that are already parsed.
+
+    This is the one place where a report is built, for a single resume and for a batch, so both
+    give the same result for the same resume.
+    """
+    check_rag_options(rag_mode, embedder)
     notes: list[str] = []
     profile: CandidateProfile | None = None
     if client is not None:
@@ -111,7 +229,7 @@ def screen_resume(
             notes.append(_fallback_note(exc))
     if profile is None:
         profile = parse_resume(resume_text, today=today)
-    report = evaluate(profile, requirements, resume_text, extra_limitations=notes)
+    report = evaluate(profile, requirements, resume_text, extra_limitations=notes, today=today)
     if rag_mode is not None:
         report = _add_retrieval(report, resume_text, rag_mode, embedder)
     return report

@@ -90,6 +90,17 @@ def cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
     return dot(unit_vector(first), unit_vector(second))
 
 
+def normalize_prefix(prefix: str) -> str:
+    """A task prefix such as 'search_query:' followed by exactly one space, or '' for none.
+
+    Some embedding models (nomic-embed-text, for one) are trained with a short label in front
+    of each text and score better when it is used. The label is added to what is embedded, never
+    to the passage text that is shown or checked against the resume.
+    """
+    prefix = prefix.strip()
+    return f"{prefix} " if prefix else ""
+
+
 class FakeEmbedder:
     """A deterministic embedder for tests and offline demos. It needs no model and no network.
 

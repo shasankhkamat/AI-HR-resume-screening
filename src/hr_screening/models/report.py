@@ -3,7 +3,7 @@
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, computed_field, model_validator
 
 
 class MatchStatus(StrEnum):
@@ -72,6 +72,17 @@ class RequirementRetrieval(BaseModel):
     method: Literal["lexical", "semantic"] = "lexical"
 
 
+class UnassessedRequirement(BaseModel):
+    """Job text that the tool could not assess. It is not a requirement that was not found.
+
+    A requirement that was assessed and not found has a status and counts as zero in the score.
+    This text had no status and no weight: the score does not include it at all.
+    """
+
+    text: str = Field(min_length=1, max_length=300)
+    reason: str
+
+
 class ScreeningReport(BaseModel):
     assessments: list[RequirementAssessment]
     coverage_score: float | None = Field(default=None, ge=0, le=100)
@@ -80,6 +91,14 @@ class ScreeningReport(BaseModel):
     human_review_required: Literal[True] = True
     # Empty unless retrieval was requested. It never changes statuses or the score.
     retrieval: list[RequirementRetrieval] = Field(default_factory=list)
+    # Job text that was not assessed. When it is not empty the score leaves it out.
+    unassessed_requirements: list[UnassessedRequirement] = Field(default_factory=list)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def score_complete(self) -> bool:
+        """False when part of the job description was not assessed, so the score is incomplete."""
+        return not self.unassessed_requirements
 
     @property
     def unresolved(self) -> list[RequirementAssessment]:

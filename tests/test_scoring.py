@@ -113,7 +113,7 @@ def test_sample_score_is_stable(sample_resume_text, sample_job, today):
 
     profile = parse_resume(sample_resume_text, today=today)
     report = evaluate(profile, parse_job_description(sample_job), sample_resume_text)
-    assert report.coverage_score == 73.5
+    assert report.coverage_score == 55.9
 
 
 # --- duplicate requirements ----------------------------------------------------------------
@@ -158,3 +158,28 @@ def test_unverified_counts_as_zero_and_is_explained():
     assert "not a measure" in report.score_explanation
     assert "understate" in report.score_explanation
     assert any("not a measure of overall suitability" in n for n in report.limitations)
+
+
+def test_the_sample_baseline_differs_from_the_old_one_only_by_the_experience_item(
+    sample_resume_text, sample_job, today
+):
+    from hr_screening.extraction.job_parser import parse_job_description
+    from hr_screening.extraction.resume_parser import parse_resume
+
+    requirements = parse_job_description(sample_job)
+    assert requirements.experience_field == "analytics"
+    profile = parse_resume(sample_resume_text, today=today)
+    with_field = evaluate(profile, requirements, sample_resume_text, today=today)
+    no_field = requirements.model_copy(update={"experience_field": None})
+    total_years_only = evaluate(profile, no_field, sample_resume_text, today=today)
+    # Without a named field the total dated years are used, as before: 12.5 of 17 weighted points.
+    assert total_years_only.coverage_score == 73.5
+    # With the field, the only item that moves is experience (weight 3: supported -> unverified),
+    # which is 9.5 of 17 weighted points.
+    changed = [
+        (a.requirement, a.status.value, b.status.value)
+        for a, b in zip(total_years_only.assessments, with_field.assessments, strict=True)
+        if a != b
+    ]
+    assert changed == [("3+ years of experience", "supported", "unverified")]
+    assert with_field.coverage_score == 55.9

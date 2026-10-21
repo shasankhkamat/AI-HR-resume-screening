@@ -28,6 +28,18 @@ class InvalidJobDescriptionError(ScreeningError):
     """The job description is empty, too long or unreadable."""
 
 
+class InvalidExtraSkillError(ScreeningError):
+    """A skill supplied with --extra-skill is empty, too long or too many."""
+
+
+class BatchInputError(ScreeningError):
+    """The resume folder is missing, is not a folder, or holds nothing to screen."""
+
+
+class OutputWriteError(ScreeningError):
+    """The batch output folder or a file in it could not be written."""
+
+
 class LLMError(ScreeningError):
     """Base class for language model failures."""
 

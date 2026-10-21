@@ -28,7 +28,7 @@ from hr_screening.llm.ollama_client import (
     parse_base_url,
     send_with_retries,
 )
-from hr_screening.rag.embeddings import validate_vectors
+from hr_screening.rag.embeddings import normalize_prefix, validate_vectors
 
 EMBED_PATH = "/api/embed"
 
@@ -45,6 +45,8 @@ class OllamaEmbedder:
         max_retries: int = 2,
         transport: Transport | None = None,
         sleep: Sleep = time.sleep,
+        query_prefix: str = "",
+        document_prefix: str = "",
     ) -> None:
         self.base_url = parse_base_url(base_url)
         self.model = model.strip()
@@ -62,6 +64,10 @@ class OllamaEmbedder:
             raise LLMConfigError(f"LLM_MAX_RETRIES must be between 0 and {MAX_RETRIES_LIMIT}.")
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
+        # Read by SemanticRetriever. This class does not add them itself, because embed()
+        # cannot tell a query from a resume passage.
+        self.query_prefix = normalize_prefix(query_prefix)
+        self.document_prefix = normalize_prefix(document_prefix)
         self._url = self.base_url + EMBED_PATH
         self._transport = transport or ollama_client._urllib_transport
         self._sleep = sleep

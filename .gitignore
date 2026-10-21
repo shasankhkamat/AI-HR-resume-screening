@@ -66,3 +66,10 @@ reports/
 *.tmp
 *.temp
 *.bak
+
+# Local smoke test output and saved test runs
+test_data/output/
+output/
+test-results.txt
+
+test_data/output*/

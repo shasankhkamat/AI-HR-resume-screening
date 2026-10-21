@@ -1,0 +1,12 @@
+﻿Job Title: Junior Data Analyst
+
+Required Skills:
+- Python
+- SQL
+- Tableau
+
+Required Education:
+- Bachelor's degree in Computer Science, Statistics, or a related field.
+
+Experience:
+- 1 year of data analysis experience.

@@ -300,3 +300,74 @@ def test_entries_without_passages_and_notes_are_explained(base_report):
     assert "No matching passage found. This does not show that the candidate lacks it." in text
     assert f"    {EXPERIENCE_NOTE}" in text
     assert "Passage 1 (no section; chars 0-3; relevance 0.50)" in text
+
+
+# --- related text versus a passage that names the skill -----------------------------------------
+
+
+def skill_entry(*passages):
+    return RequirementRetrieval(
+        requirement="tableau", kind=K.REQUIRED_SKILL, passages=list(passages)
+    )
+
+
+def with_entries(base_report, *items):
+    return format_report_text(base_report.model_copy(update={"retrieval": list(items)}))
+
+
+def test_passages_that_never_name_the_skill_are_called_related_text(base_report):
+    related = RetrievedPassage(start=0, end=3, text="abc", score=0.5)
+    text = with_entries(base_report, skill_entry(related, related))
+    assert text.count("None of these passages names the skill itself.") == 1
+    assert "They are related text only, not evidence of the skill." in text
+    assert "Related text only: this passage" not in text  # the entry level line is enough
+
+
+def test_in_a_mixed_entry_only_the_passages_without_the_skill_are_marked(base_report):
+    named = RetrievedPassage(start=0, end=3, text="abc", score=0.9, mention_kinds=["affirmative"])
+    related = RetrievedPassage(start=4, end=7, text="def", score=0.4)
+    text = with_entries(base_report, skill_entry(named, related))
+    assert "None of these passages" not in text
+    first, second = text.split("Passage 2", 1)
+    assert "Related text only" not in first.split("Passage 1", 1)[1]
+    assert "Related text only: this passage does not name the skill itself." in second
+
+
+def test_a_passage_that_names_the_skill_keeps_its_label_and_no_related_note(base_report):
+    named = RetrievedPassage(start=0, end=3, text="abc", score=0.9, mention_kinds=["negated"])
+    text = with_entries(base_report, skill_entry(named))
+    assert "skill mentioned as: negated" in text
+    assert "related text" not in text.lower()
+
+
+def test_text_queries_are_never_called_related_text(base_report):
+    plain = RetrievedPassage(start=0, end=3, text="abc", score=0.5)
+    degree = RequirementRetrieval(requirement="Bachelor level", kind=K.EDUCATION, passages=[plain])
+    cert = RequirementRetrieval(requirement="Cert", kind=K.CERTIFICATION, passages=[plain])
+    text = with_entries(base_report, degree, cert)
+    assert "related text" not in text.lower()
+    assert "names the skill" not in text
+
+
+def test_the_related_text_wording_applies_to_semantic_entries_too(base_report):
+    passage = RetrievedPassage(start=0, end=3, text="abc", score=0.41)
+    entry = skill_entry(passage).model_copy(update={"method": "semantic"})
+    text = with_entries(base_report, entry)
+    assert "None of these passages names the skill itself." in text
+    assert "similarity 0.41" in text
+
+
+def test_the_wording_changes_no_status_score_or_assessment_text(base_report, entries):
+    before = base_report.model_dump()
+    plain = format_report_text(base_report)
+    full = format_report_text(base_report.model_copy(update={"retrieval": entries}))
+    assert base_report.model_dump() == before  # formatting does not touch the report
+    requirements = plain.split("\n\nLIMITATIONS")[0]
+    assert full.startswith(requirements)  # statuses, evidence and the score line are identical
+    assert "Requirement coverage score:" in full
+    assert "Decision support only. A human reviewer must make any hiring decision." in full
+    assert "does not change any status or the score" in full
+    assert "Read each one yourself." in full
+    assert [a.status for a in base_report.assessments] == [
+        a.status for a in base_report.model_copy(update={"retrieval": entries}).assessments
+    ]

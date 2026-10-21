@@ -22,6 +22,12 @@ _SEMANTIC_INTRO = (
     "Read each one yourself."
 )
 _NO_PASSAGE = "No matching passage found. This does not show that the candidate lacks it."
+_SKILL_KINDS = (RequirementKind.REQUIRED_SKILL, RequirementKind.PREFERRED_SKILL)
+_NO_SKILL_MENTION = (
+    "None of these passages names the skill itself. They are related text only, "
+    "not evidence of the skill."
+)
+_RELATED_TEXT = "Related text only: this passage does not name the skill itself."
 
 
 def _retrieval_lines(report: ScreeningReport) -> list[str]:
@@ -38,6 +44,11 @@ def _retrieval_lines(report: ScreeningReport) -> list[str]:
             lines.append(f"    {entry.note}")
         elif not entry.passages:
             lines.append(f"    {_NO_PASSAGE}")
+        # Only skill queries can say whether the skill itself appears in a passage.
+        named = [bool(p.mention_kinds) for p in entry.passages]
+        is_skill = entry.kind in _SKILL_KINDS
+        if is_skill and entry.passages and not any(named):
+            lines.append(f"    {_NO_SKILL_MENTION}")
         for number, passage in enumerate(entry.passages, start=1):
             facts = [
                 passage.section or "no section",
@@ -48,6 +59,8 @@ def _retrieval_lines(report: ScreeningReport) -> list[str]:
                 kinds = ", ".join(dict.fromkeys(passage.mention_kinds))
                 facts.append(f"skill mentioned as: {kinds}")
             lines.append(f"    Passage {number} ({'; '.join(facts)})")
+            if is_skill and any(named) and not passage.mention_kinds:
+                lines.append(f"        {_RELATED_TEXT}")
             lines += [f"        | {text}" for text in passage.text.splitlines()]
     return lines
 
@@ -62,6 +75,11 @@ def format_report_text(report: ScreeningReport) -> str:
         lines.append("Requirement coverage score: not available")
     else:
         lines.append(f"Requirement coverage score: {report.coverage_score:.1f} / 100")
+    if not report.score_complete:
+        lines.append(
+            f"SCORE INCOMPLETE: {len(report.unassessed_requirements)} line(s) of the job "
+            "description were not assessed. See NOT ASSESSED below."
+        )
     lines += [report.score_explanation, "", "REQUIREMENTS"]
     for item in report.assessments:
         line = f"[{item.status.value.upper()}] {item.requirement} ({_KIND_LABELS[item.kind]})"
@@ -70,6 +88,10 @@ def format_report_text(report: ScreeningReport) -> str:
         lines += [f'    Evidence: "{e.snippet}"' for e in item.evidence]
     lines += ["", "NOT FOUND OR UNVERIFIED (check manually)"]
     lines += [f"- {a.requirement}: {a.status.value}" for a in report.unresolved] or ["- none"]
+    if report.unassessed_requirements:
+        lines += ["", "NOT ASSESSED (not in the score; this is not the same as not found)"]
+        for item in report.unassessed_requirements:
+            lines += [f"- {item.text}", f"    {item.reason}"]
     if report.retrieval:
         lines += _retrieval_lines(report)
     lines += ["", "LIMITATIONS"]

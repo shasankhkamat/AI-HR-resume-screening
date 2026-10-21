@@ -50,6 +50,9 @@ OLD_KEYS = {
     "score_explanation",
     "limitations",
     "human_review_required",
+    # Added with the unassessed requirements work. They are always present.
+    "score_complete",
+    "unassessed_requirements",
 }
 
 
