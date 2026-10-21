@@ -1,116 +1,152 @@
-﻿# AI-Powered HR Resume Screening System
+﻿# AI HR Resume Screening
 
-An AI-powered HR resume screening and candidate evaluation system planned around a Retrieval-Augmented Generation (RAG) architecture.
+An explainable screening MVP. It takes one PDF or DOCX resume and one job description and
+prints a report: each requirement is marked supported, partial, not found or unverified,
+with the exact resume line that supports it. It supports human review. It does not make
+hiring decisions.
 
-## Current Status
+## Status
 
-**Milestone 1: Project scaffolding.**
+Implemented and tested:
 
-Resume parsing, embeddings, ChromaDB indexing, candidate retrieval, LLM evaluation, and API endpoints are planned but not implemented yet.
+- Resume ingestion for text based PDF and DOCX files (size, type and page checks)
+- Rule based parsing of the resume and the job description
+- Pydantic models for candidate, job requirements and report
+- Keyword skill matching with aliases, version suffixes, negation and learning detection
+- Evidence validation: every evidence snippet is exact resume text and is checked against it
+- Weighted requirement coverage score
+- An `LLMClient` interface, a fake client, and verification of model output
+- A pipeline with rule based fallback, a command line tool, pytest tests and Ruff
 
-## Planned Architecture
+Not implemented (future work):
 
-1. Ingest PDF and DOCX resumes from a monitored folder.
-2. Extract resume text and preserve candidate metadata.
-3. Chunk text, generate embeddings, and index it in persistent ChromaDB.
-4. Convert recruiter requirements into filters and semantic queries.
-5. Retrieve relevant candidates and generate evidence-grounded evaluations.
-6. Expose workflows through FastAPI and produce Markdown reports.
+- A real LLM provider adapter. Live inference does not exist yet.
+- RAG, embeddings or semantic retrieval. One resume and one job description fit in one prompt.
+  RAG becomes useful for searching a pool of many resumes.
+- OCR for scanned PDFs
+- Any fairness, bias or compliance guarantee. No such testing has been done.
 
-## Technology Stack
-
-- Python 3.11+
-- FastAPI
-- Pydantic v2
-- LangChain
-- ChromaDB
-- PyMuPDF
-- OpenAI-compatible LLM and embedding APIs
-- pytest and Ruff
-
-Application dependencies will be introduced incrementally.
-
-## Repository Structure
+## Architecture
 
 ```text
-ai-hr-resume-screening/
-├── .github/workflows/
-├── data/
-│   ├── incoming/
-│   ├── processed/
-│   └── chroma/
-├── docs/
-├── logs/
-├── src/hr_screening/
-├── tests/
-├── .env.example
-├── .gitignore
-├── pyproject.toml
-└── README.md
+resume file -> ingestion (validate, extract text)
+job text    -> extraction.job_parser -> JobRequirements
+resume text -> extraction.resume_parser (rules)  or  llm.extractor (optional, verified)
+                -> CandidateProfile
+evaluation.evaluator -> ScreeningReport (status + evidence + score + limitations)
 ```
 
-## Prerequisites
-
-- Python 3.11 or newer
-- Git
-
-## Setup — Windows PowerShell
-
-Run from the repository root:
+## Run it
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
+python docs\make_sample_resume.py
+python -m hr_screening.main --resume data\incoming\sample_resume.docx --job-text "Requirements`n- 3+ years of experience`n- Python and SQL`n- Bachelor's degree"
 ```
 
-## Setup — macOS/Linux
+Options: `--job-file path.txt`, `--json`, `--resume-dir folder`.
+The sample resume is synthetic. Never commit real resumes.
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
+## Tests
+
+```powershell
+pytest
+ruff check .
 ```
 
-## Verification
+## How skill matching works
 
-```bash
-python -c "from hr_screening import __version__; print(__version__)"
-python -m pytest
-python -m ruff check src tests
-```
+Skills come from a built in list of about 55 skills, each with a few aliases (for example
+`js` for JavaScript, `sklearn` for scikit-learn). A skill matches as a whole word, ignoring
+case. This is why `Java` does not match `JavaScript` and `SQL` does not match `PostgreSQL`
+or `NoSQL`. A version number may follow directly, so `Python3` and `C++17` match.
 
-## Configuration
+Each mention is then labelled:
 
-Copy `.env.example` to `.env` when local configuration is needed. Configuration loading has not been implemented yet. Never commit API keys or `.env`.
+- **Affirmative**: counts as a mention of the skill.
+- **Negated**: "no experience with Python", "never used Python", "Python: none". Not counted.
+- **Aspirational**: "currently learning Python", "plan to learn Python". Not counted.
 
-## Security and Privacy
+If a skill has both an affirmative and a negated mention, the result is `unverified` and
+both lines are shown, because the resume contradicts itself.
 
-- Never commit real resumes, extracted personal information, or logs containing personal data.
-- Keep credentials in local environment files and never commit secrets.
-- Keep local databases and candidate datasets out of version control.
-- Use synthetic candidate data in automated tests.
-- Treat model-generated assessments as decision-support information, with human oversight for hiring decisions.
+A skill found only under a PROJECTS heading is `supported`, but the report labels it as
+project based evidence. It is a mention. It is not proof of professional experience.
 
-## Development Roadmap
+A related skill (for example Power BI for a Tableau requirement) gives `partial` credit.
 
-1. Project scaffolding and Git setup.
-2. Configuration and settings management.
-3. Resume parsing.
-4. Text chunking and metadata.
-5. Embeddings and ChromaDB indexing.
-6. Automated resume ingestion.
-7. Recruiter query decomposition.
-8. Hybrid candidate retrieval.
-9. Evidence-grounded LLM evaluation.
-10. Structured scorecards and citation validation.
-11. FastAPI endpoints.
-12. Markdown reports.
-13. Testing and quality evaluation.
-14. Security, privacy, and deployment hardening.
+Limitations of matching:
 
-## License
+- The negation and learning rules are small and can miss unusual wording. Wording they do not
+  recognize is treated as a normal mention.
+- A keyword does not show depth, recency, proficiency or years of use. The tool never infers
+  any of these.
+- `regression` also matches "regression testing" in QA. `js` also matches `Node.js`.
+- Skills outside the built in list are matched only when they are named in the job
+  description, as plain whole words.
 
-No license has been selected yet.
+## How evidence is validated
+
+- Evidence is copied from the resume. Snippets are exact slices of the original text.
+  Case folding and whitespace collapsing are used only to find a match. The folded text is
+  never stored or shown.
+- Before a report is returned, every snippet is checked to exist in the resume text. A
+  supported or partial result left with no traceable evidence becomes `unverified`.
+- Model output is untrusted. Each item the model proposes must be found in the resume as a
+  whole word match. Kept items are stored as the resume wrote them, not as the model did.
+  Model skills need an affirmative mention. Model dates must sit on the role's line or the
+  line after it. Years of experience are never taken from the model.
+- Certifications need all key terms on one line that sits under a CERTIFICATIONS heading or
+  names a certificate. Negated, in progress, planned or expired certifications are
+  `unverified`.
+- Degrees that are in progress or expected are `partial`, not completed. Dropped or
+  ambiguous degrees are `unverified`.
+- Date ranges in the future are not counted as work done. Impossible ranges are ignored.
+
+**This is a text check, not a meaning check.** It shows the words exist in the resume. It
+does not prove the resume says what the requirement needs, so a human must still review.
+
+## Score
+
+`100 x sum(weight x credit) / sum(weight)`, rounded to one decimal, ties half up.
+Credit: supported 1.0, partial 0.5, not found 0, unverified 0.
+Weights: required skill 3, experience 3, education 2, certification 2, preferred skill 1.
+Repeated requirements are counted once, and a skill listed as both required and preferred
+keeps the required classification.
+
+The score summarizes how many listed requirements have supporting text. It is not a measure
+of a candidate's quality, job performance or hiring success. Weights and credits are
+judgment calls, not statistics.
+
+## Why not found and unverified do not mean "lacks the skill"
+
+Both statuses count as zero, so the score can understate a candidate. They mean the tool
+found no usable evidence. Text extraction can miss content, resumes leave things out, and
+the rules can misread wording. They are not proof of absence. Treat the
+"NOT FOUND OR UNVERIFIED" list as a checklist for a person to read.
+
+## Why human review is required
+
+The tool uses keyword rules and simple pattern matching. It can be wrong in both directions.
+Every report says that a human reviewer must make any hiring decision, and the report model
+does not allow this to be turned off.
+
+## LLM status
+
+The `LLMClient` interface, output validation and a fake client exist and are tested.
+No real provider adapter is connected, so live inference is not implemented.
+If a client is supplied and it fails or returns something invalid, the rule based parser is
+used instead and the report says so. Logs name only the error class, never resume text.
+Live use will need a chosen provider plus `LLM_PROVIDER`, `LLM_API_KEY` and `LLM_MODEL` set
+in `.env`.
+
+## Known limitations
+
+- Scanned PDFs need OCR, which is not included.
+- Multi column PDFs can scramble text order.
+- Rule based parsing expects common headings such as SKILLS and EXPERIENCE.
+- Degrees written as `BA` or `BS` are not recognized. `Bachelor of Arts` is.
+- The evaluator reads skills from the raw resume text, so `CandidateProfile.skills` does not
+  affect skill results. The profile does affect experience, education and the certification
+  fallback.
+- Job requirements are extracted with simple rules. A job line such as "Python not required"
+  is still read as requiring Python.

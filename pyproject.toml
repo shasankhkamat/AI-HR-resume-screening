@@ -5,12 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ai-hr-resume-screening"
 version = "0.1.0"
-description = "AI-powered HR resume screening and candidate evaluation using a RAG architecture."
+description = "Explainable HR resume screening MVP: rule based extraction, an optional verified LLM extraction interface and an evidence based requirement coverage report. RAG and live LLM providers are planned, not implemented."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.7",
     "pydantic-settings>=2.2",
+    "pypdf>=4.0",
 ]
 
 [project.optional-dependencies]
@@ -18,6 +19,9 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.5",
 ]
+
+[project.scripts]
+hr-screening = "hr_screening.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -4,10 +4,12 @@ score = 100 * sum(weight * credit) / sum(weight), over the requirements in the j
 Credit: supported 1.0, partial 0.5, not found 0, unverified 0.
 Weights: required skill 3, experience 3, education 2, certification 2, preferred skill 1.
 Weights and credits are judgment calls, not statistics. Unverified items count as zero,
-so the score can understate a candidate.
+so the score can understate a candidate. The score is rounded to one decimal place using
+exact decimal arithmetic, half up, so a tie such as 81.25 always gives 81.3.
 """
 
 from collections.abc import Sequence
+from decimal import ROUND_HALF_UP, Decimal
 
 from hr_screening.models.report import MatchStatus, RequirementAssessment, RequirementKind
 
@@ -35,6 +37,9 @@ SCORE_EXPLANATION = (
 def compute_coverage(assessments: Sequence[RequirementAssessment]) -> tuple[float | None, str]:
     if not assessments:
         return None, "No requirements were detected, so no score was calculated."
-    possible = sum(WEIGHTS[a.kind] for a in assessments)
-    earned = sum(WEIGHTS[a.kind] * CREDIT[a.status] for a in assessments)
-    return round(100 * earned / possible, 1), SCORE_EXPLANATION
+    weights = [Decimal(str(WEIGHTS[a.kind])) for a in assessments]
+    credits = [Decimal(str(CREDIT[a.status])) for a in assessments]
+    possible = sum(weights)
+    earned = sum(w * c for w, c in zip(weights, credits, strict=True))
+    score = (100 * earned / possible).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+    return float(score), SCORE_EXPLANATION

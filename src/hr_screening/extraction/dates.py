@@ -3,6 +3,9 @@
 Calculation is deliberately conservative: a year with no month counts as January for
 both start and end, and the end month is not counted inclusively.
 Overlapping roles are merged so they are not counted twice.
+Work that has not happened yet is not counted: a range that starts in the future is
+ignored and a range that ends in the future is cut off at today. Ranges longer than
+100 years and totals above 80 years are treated as unusable data, not as experience.
 """
 
 import re
@@ -18,6 +21,8 @@ MONTH_PATTERN = (
 )
 DATE_PATTERN = rf"(?:(?:{MONTH_PATTERN}\.?\s+)?(?:19|20)\d{{2}}|\d{{1,2}}/(?:19|20)\d{{2}})"
 PRESENT_PATTERN = r"(?:present|current|now|till date)\b"
+MAX_SPAN_MONTHS = 1200
+MAX_TOTAL_YEARS = 80
 
 
 def to_month_index(token: str, today: date) -> int | None:
@@ -40,27 +45,44 @@ def to_month_index(token: str, today: date) -> int | None:
     return None
 
 
-def month_span(start: str | None, end: str | None, today: date) -> int | None:
+def _usable_span(start: str | None, end: str | None, today: date) -> tuple[int, int] | None:
+    """Return (start, end) month numbers, or None if the range cannot count as work done."""
     if not start or not end:
         return None
     start_index = to_month_index(start, today)
     end_index = to_month_index(end, today)
     if start_index is None or end_index is None or end_index < start_index:
         return None
-    return end_index - start_index
+    now_index = today.year * 12 + today.month - 1
+    if start_index > now_index:
+        return None
+    end_index = min(end_index, now_index)
+    if end_index - start_index > MAX_SPAN_MONTHS:
+        return None
+    return start_index, end_index
+
+
+def month_span(start: str | None, end: str | None, today: date) -> int | None:
+    span = _usable_span(start, end, today)
+    return None if span is None else span[1] - span[0]
+
+
+def unusable_date_ranges(experience: Iterable[WorkExperience], today: date) -> int:
+    """Count roles that have both dates but whose range cannot be counted."""
+    return sum(
+        1
+        for item in experience
+        if item.start and item.end and _usable_span(item.start, item.end, today) is None
+    )
 
 
 def total_years(experience: Iterable[WorkExperience], today: date) -> float | None:
     """Total years across dated roles with overlaps merged. None if no role has usable dates."""
     spans = []
     for item in experience:
-        if not item.start or not item.end:
-            continue
-        start = to_month_index(item.start, today)
-        end = to_month_index(item.end, today)
-        if start is None or end is None or end < start:
-            continue
-        spans.append((start, end))
+        span = _usable_span(item.start, item.end, today)
+        if span is not None:
+            spans.append(span)
     if not spans:
         return None
     spans.sort()
@@ -73,4 +95,5 @@ def total_years(experience: Iterable[WorkExperience], today: date) -> float | No
             months += current_end - current_start
             current_start, current_end = start, end
     months += current_end - current_start
-    return round(months / 12, 1)
+    years = round(months / 12, 1)
+    return years if years <= MAX_TOTAL_YEARS else None

@@ -90,13 +90,20 @@ TRANSFERABLE: dict[str, tuple[str, ...]] = {
 }
 
 
+# Optional version suffix glued to a name: Python3, Python3.11, C++17, Java8.
+_VERSION = r"(?:\d+(?:\.\d+){0,2})?"
+
+
 @lru_cache(maxsize=512)
 def skill_pattern(skill: str) -> re.Pattern[str]:
     """Whole word, case insensitive pattern for a skill and its aliases.
 
     The boundaries stop 'sql' matching inside 'postgresql' and 'java' inside 'javascript'.
+    A version number may follow the name directly, so 'Python3' and 'C++17' match.
     """
     key = skill.strip().lower()
     names = {key, *SKILL_ALIASES.get(key, ())}
     alternatives = "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True))
-    return re.compile(rf"(?<![A-Za-z0-9+#])(?:{alternatives})(?![A-Za-z0-9+#])", re.IGNORECASE)
+    return re.compile(
+        rf"(?<![A-Za-z0-9+#])(?:{alternatives}){_VERSION}(?![A-Za-z0-9+#])", re.IGNORECASE
+    )

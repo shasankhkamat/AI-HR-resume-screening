@@ -4,6 +4,7 @@ It does not extract names or contact details, by design.
 """
 
 import re
+from bisect import bisect_right
 from datetime import date
 
 from hr_screening.extraction.dates import (
@@ -11,6 +12,7 @@ from hr_screening.extraction.dates import (
     PRESENT_PATTERN,
     month_span,
     total_years,
+    unusable_date_ranges,
 )
 from hr_screening.extraction.degrees import detect_degree_level
 from hr_screening.models.candidate import CandidateProfile, Education, WorkExperience
@@ -73,6 +75,12 @@ def parse_resume(text: str, *, today: date | None = None) -> CandidateProfile:
         )
 
     experience = _parse_experience(sections.get("experience", []), today)
+    skipped = unusable_date_ranges(experience, today)
+    if skipped:
+        notes.append(
+            f"{skipped} dated role(s) had date ranges that could not be counted "
+            "(in the future, reversed or implausible)."
+        )
     years = total_years(experience, today)
     source = "date_ranges" if years is not None else "unknown"
     snippet = None
@@ -105,6 +113,31 @@ def find_stated_years(text: str) -> tuple[float, str] | None:
     return float(match.group(1)), line_at(text, match.start())
 
 
+def _heading_key(line: str) -> str | None:
+    """Return the section key if ``line`` is a section heading, else None."""
+    return _HEADINGS.get(line.rstrip(":").strip().lower()) if len(line) <= 40 else None
+
+
+class SectionIndex:
+    """Maps a character position in the resume text to its section heading, if any."""
+
+    def __init__(self, text: str) -> None:
+        self._starts: list[int] = []
+        self._names: list[str | None] = []
+        offset = 0
+        for raw in text.splitlines(keepends=True):
+            key = _heading_key(raw.strip()) if raw.strip() else None
+            if key is not None:
+                self._starts.append(offset)
+                self._names.append(None if key == "other" else key)
+            offset += len(raw)
+
+    def at(self, position: int) -> str | None:
+        """Section key such as 'projects' or 'experience', or None if unknown."""
+        found = bisect_right(self._starts, position) - 1
+        return self._names[found] if found >= 0 else None
+
+
 def _split_sections(text: str) -> dict[str, list[str]]:
     sections: dict[str, list[str]] = {}
     current: str | None = None
@@ -112,7 +145,7 @@ def _split_sections(text: str) -> dict[str, list[str]]:
         line = raw.strip()
         if not line:
             continue
-        key = _HEADINGS.get(line.rstrip(":").strip().lower()) if len(line) <= 40 else None
+        key = _heading_key(line)
         if key is not None:
             current = key
             sections.setdefault(key, [])
