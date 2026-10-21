@@ -42,3 +42,15 @@ class LLMRateLimitError(LLMError):
 
 class LLMResponseError(LLMError):
     """The model answered, but the answer was malformed or failed validation."""
+
+
+class LLMConfigError(LLMError):
+    """An LLM setting is missing or invalid. Fix the configuration; do not fall back."""
+
+
+class LLMConnectionError(LLMError):
+    """The model server could not be reached."""
+
+
+class LLMModelNotFoundError(LLMError):
+    """The configured model is not installed on the model server."""

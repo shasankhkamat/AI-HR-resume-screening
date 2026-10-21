@@ -1,4 +1,3 @@
-
 """Centralized application configuration."""
 
 from functools import lru_cache
@@ -24,9 +23,18 @@ class Settings(BaseSettings):
     app_env: Literal["development", "testing", "production"] = "development"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
+    # The only supported provider is "ollama". The placeholders below mean "not configured".
     llm_provider: str = "your_provider_here"
+    # Kept for compatibility. The Ollama provider does not use an API key.
     llm_api_key: SecretStr = Field(default=SecretStr(""), repr=False)
     llm_model: str = "your_model_name_here"
+
+    # Local Ollama server. Resume text is sent here when --llm is used.
+    ollama_base_url: str = "http://localhost:11434"
+    llm_timeout_seconds: float = Field(default=30.0, gt=0, le=600)
+    llm_max_retries: int = Field(default=2, ge=0, le=5)
+    # JSON for one resume is short. A higher limit only matters for models that think first.
+    llm_max_output_tokens: int = Field(default=2048, ge=64, le=32768)
 
     embedding_model: str = "your_embedding_model_here"
 

@@ -15,12 +15,13 @@ Implemented and tested:
 - Keyword skill matching with aliases, version suffixes, negation and learning detection
 - Evidence validation: every evidence snippet is exact resume text and is checked against it
 - Weighted requirement coverage score
-- An `LLMClient` interface, a fake client, and verification of model output
-- A pipeline with rule based fallback, a command line tool, pytest tests and Ruff
+- Optional extraction with a local Ollama model (opt in with `--llm`), with verification of
+  the model output and a rule based fallback
+- A pipeline, a command line tool, pytest tests and Ruff
 
 Not implemented (future work):
 
-- A real LLM provider adapter. Live inference does not exist yet.
+- Hosted LLM providers. Only a local Ollama server is supported.
 - RAG, embeddings or semantic retrieval. One resume and one job description fit in one prompt.
   RAG becomes useful for searching a pool of many resumes.
 - OCR for scanned PDFs
@@ -36,15 +37,126 @@ resume text -> extraction.resume_parser (rules)  or  llm.extractor (optional, ve
 evaluation.evaluator -> ScreeningReport (status + evidence + score + limitations)
 ```
 
+With `--llm`, `llm.factory` builds an `OllamaClient` from the settings. The client implements
+the small `LLMClient` interface (`complete(system_prompt, user_prompt) -> str`) and only
+returns the model's text. Parsing, validation and the evidence checks stay in `llm.extractor`.
+
 ## Run it
+
+Rule based mode (the default). It makes no network request and needs no model.
 
 ```powershell
 python docs\make_sample_resume.py
 python -m hr_screening.main --resume data\incoming\sample_resume.docx --job-text "Requirements`n- 3+ years of experience`n- Python and SQL`n- Bachelor's degree"
 ```
 
-Options: `--job-file path.txt`, `--json`, `--resume-dir folder`.
+LLM mode. It needs Ollama and a downloaded model (see the next section).
+
+```powershell
+python -m hr_screening.main --resume data\incoming\sample_resume.docx --job-text "Requirements`n- 3+ years of experience`n- Python and SQL`n- Bachelor's degree" --llm
+```
+
+Options: `--job-file path.txt`, `--json`, `--resume-dir folder`, `--llm`.
 The sample resume is synthetic. Never commit real resumes.
+
+## Local LLM mode with Ollama
+
+### What is sent
+
+With `--llm`, the resume text and a fixed set of extraction instructions are sent to the
+Ollama server at `OLLAMA_BASE_URL`. The job description is not sent. Nothing is sent without
+`--llm`.
+
+### 1. Install Ollama
+
+Install Ollama from the official site, https://ollama.com/download. On Windows the installer
+runs Ollama in the background and adds the `ollama` command to your terminal. Check it:
+
+```powershell
+ollama --version
+```
+
+The Windows guide is at https://docs.ollama.com/windows.
+
+### 2. Download a model
+
+No model name is built into this project. Choose a small model that fits your memory from
+https://ollama.com/library, download it, and look at the exact name that Ollama shows:
+
+```powershell
+ollama pull <model-name>
+ollama list
+```
+
+Model downloads are large (often several GB) and need disk space. Do not choose a name that
+ends in `-cloud`. Cloud models run on Ollama's remote servers, so resume text would leave your
+computer. The project refuses names ending in `-cloud` or `:cloud` as a safety check. That
+check is best effort. Confirm with `ollama list` that your model is downloaded to this machine.
+
+### 3. Configure
+
+Copy `.env.example` to `.env` and set at least these two lines. Use the exact name from
+`ollama list`.
+
+```text
+LLM_PROVIDER=ollama
+LLM_MODEL=<model-name>
+```
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `LLM_PROVIDER` | none | Must be `ollama` |
+| `LLM_MODEL` | none | Name of an installed model. No default is provided |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Address of the Ollama server |
+| `LLM_TIMEOUT_SECONDS` | 30 | Wait per attempt. The first call loads the model, so use 120 or more on slow computers |
+| `LLM_MAX_RETRIES` | 2 | Extra attempts for timeouts, lost connections and server errors. 0 to 5 |
+| `LLM_MAX_OUTPUT_TOKENS` | 2048 | Limit on the reply length. The JSON for one resume is short. Models that think first may need more |
+
+No API key is needed. `LLM_API_KEY` is not used by this provider. The longest a run can wait
+is about (retries + 1) x timeout.
+
+### 4. What happens when something goes wrong
+
+| Situation | Result |
+|---|---|
+| `LLM_PROVIDER` or `LLM_MODEL` missing, unsupported provider, bad URL, a setting out of range, or a cloud model name | Message on screen and exit code 2. No report and no silent fallback |
+| Ollama not running, timeout, model not installed, server error, empty reply, reply cut off at the token limit, invalid JSON | The rule based parser is used. The report states the reason, for example "LLM extraction failed (the model server could not be reached), so the rule based parser was used instead." |
+| Model proposes items that are not in the resume, or skills the resume denies | Those items are discarded and the report says how many |
+
+Transient failures are retried a limited number of times with a short pause. A server that is
+not running, a missing model and bad requests are not retried.
+
+### 5. Manual smoke test with a synthetic resume
+
+Use only the synthetic sample resume. Never use a real candidate resume.
+
+1. Create it: `python docs\make_sample_resume.py`
+2. Run rule based mode and note the score and the statuses.
+3. Make sure Ollama is running and `ollama list` shows your model.
+4. Run the same command with `--llm`.
+5. Look for the line "A language model performed the extraction", or for a fallback reason.
+6. Compare the two reports. The score and some statuses can differ. Decide for yourself
+   whether each difference is right by reading the resume lines shown as evidence.
+
+### Privacy
+
+- The default address is on this computer. The privacy benefit holds only if the server is
+  trusted and `OLLAMA_BASE_URL` still points at it. Do not point it at a remote service. The
+  command line prints a warning when the address is not localhost, 127.0.0.1 or ::1.
+- Requests ignore proxy settings and never follow redirects, so resume text goes only to the
+  configured address. Only `http` and `https` addresses are accepted.
+- Prompts, resume text, model replies and response bodies are never logged or placed in error
+  messages. Error messages are fixed text.
+- The report itself contains resume lines as evidence. Treat the output as sensitive.
+- Local inference has no per request API charge. It does need local compute, disk space and
+  model downloads, and it can be slow without a GPU.
+
+### Accuracy
+
+A model that runs and passes the tests is not a model that is accurate. The automated tests
+use fake servers and prove only that the plumbing and the error handling work. The evidence
+check proves that extracted text exists in the resume. It does not prove the text means what
+the model says. Treat every LLM result as a suggestion for a human reviewer.
 
 ## Tests
 
@@ -52,6 +164,10 @@ The sample resume is synthetic. Never commit real resumes.
 pytest
 ruff check .
 ```
+
+No test needs Ollama, a downloaded model, an API key or the internet. The tests use fake
+transports. A few tests start a tiny HTTP server on 127.0.0.1 inside the test process to
+exercise the real HTTP code. Nothing leaves your computer.
 
 ## How skill matching works
 
@@ -126,18 +242,9 @@ the rules can misread wording. They are not proof of absence. Treat the
 
 ## Why human review is required
 
-The tool uses keyword rules and simple pattern matching. It can be wrong in both directions.
-Every report says that a human reviewer must make any hiring decision, and the report model
-does not allow this to be turned off.
-
-## LLM status
-
-The `LLMClient` interface, output validation and a fake client exist and are tested.
-No real provider adapter is connected, so live inference is not implemented.
-If a client is supplied and it fails or returns something invalid, the rule based parser is
-used instead and the report says so. Logs name only the error class, never resume text.
-Live use will need a chosen provider plus `LLM_PROVIDER`, `LLM_API_KEY` and `LLM_MODEL` set
-in `.env`.
+The tool uses keyword rules, simple pattern matching and optionally a small local model. It
+can be wrong in both directions. Every report says that a human reviewer must make any hiring
+decision, and the report model does not allow this to be turned off.
 
 ## Known limitations
 
@@ -150,3 +257,5 @@ in `.env`.
   fallback.
 - Job requirements are extracted with simple rules. A job line such as "Python not required"
   is still read as requiring Python.
+- An invalid value in `.env` for any setting (for example `LLM_TIMEOUT_SECONDS=abc`) stops
+  the program with a clear message, even without `--llm`.

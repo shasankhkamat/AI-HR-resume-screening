@@ -8,8 +8,14 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from hr_screening.errors import InvalidJobDescriptionError, ScreeningError
+from pydantic import ValidationError
+
+from hr_screening.config import get_settings
+from hr_screening.errors import InvalidJobDescriptionError, LLMConfigError, ScreeningError
 from hr_screening.evaluation.formatting import format_report_text
+from hr_screening.llm.base import LLMClient
+from hr_screening.llm.factory import build_llm_client
+from hr_screening.llm.ollama_client import base_url_is_local
 from hr_screening.logging_config import configure_logging
 from hr_screening.pipeline import screen_resume
 
@@ -27,7 +33,37 @@ def _build_parser() -> argparse.ArgumentParser:
     source.add_argument("--job-text", help="Job description as text")
     parser.add_argument("--resume-dir", help="If set, the resume must be inside this folder")
     parser.add_argument("--json", action="store_true", help="Print the report as JSON")
+    parser.add_argument(
+        "--llm",
+        action="store_true",
+        help=(
+            "Opt in to extraction with a local Ollama model (see OLLAMA_BASE_URL and LLM_MODEL). "
+            "Resume text is sent to that server. If the model fails, rules are used instead."
+        ),
+    )
     return parser
+
+
+def _invalid_settings_message(exc: ValidationError) -> str:
+    """Name the invalid settings. The invalid values themselves are never shown."""
+    names = sorted({str(item["loc"][0]).upper() for item in exc.errors() if item.get("loc")})
+    return f"Invalid value for: {', '.join(names)}. Check your environment variables or .env."
+
+
+def _build_client() -> LLMClient:
+    """Build the LLM client from settings. Configuration problems raise LLMConfigError."""
+    try:
+        settings = get_settings()
+    except ValidationError as exc:
+        raise LLMConfigError(_invalid_settings_message(exc)) from None
+    client = build_llm_client(settings)
+    if not base_url_is_local(settings.ollama_base_url):
+        print(
+            "Warning: OLLAMA_BASE_URL is not a local address. "
+            "Resume text will be sent to that server.",
+            file=sys.stderr,
+        )
+    return client
 
 
 def _read_job_file(path: str) -> str:
@@ -53,10 +89,15 @@ def _use_utf8_output() -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     _use_utf8_output()
-    configure_logging()
+    try:
+        configure_logging()
+    except ValidationError as exc:
+        print(f"Error: {_invalid_settings_message(exc)}", file=sys.stderr)
+        return 2
     try:
         job_text = args.job_text if args.job_text is not None else _read_job_file(args.job_file)
-        report = screen_resume(args.resume, job_text, base_dir=args.resume_dir)
+        client = _build_client() if args.llm else None
+        report = screen_resume(args.resume, job_text, client=client, base_dir=args.resume_dir)
     except ScreeningError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
