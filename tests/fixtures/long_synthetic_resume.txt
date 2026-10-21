@@ -1,0 +1,38 @@
+SUMMARY
+Analytics professional who turns operational data into decisions for business teams. Comfortable with reporting, forecasting and experiment design, and with explaining results to non technical managers.
+
+SKILLS
+Languages: Python, SQL
+Libraries and tools: pandas, scikit-learn, matplotlib, Git, Docker
+Data platforms: PostgreSQL, Snowflake, Airflow
+Reporting: Power BI, Excel
+Currently learning Spark through an internal training programme.
+
+EXPERIENCE
+Senior Analyst, Sample Ltd   Jan 2022 - Present
+- Built weekly revenue dashboards in Power BI used by four regional managers and reviewed every Monday.
+- Wrote SQL against PostgreSQL to reconcile billing data, which cut the month end close by two days.
+- Trained a churn model with scikit-learn and presented the findings to the leadership team.
+- Mentored two junior analysts on code review and on documenting their queries.
+- Has no hands on experience with Kubernetes because the platform team handled all deployments.
+
+Data Analyst, Example Corp   Jan 2019 - Dec 2021
+- Automated a monthly reporting pipeline in Python and pandas, replacing a manual Excel process.
+- Ran A/B tests on pricing pages and reported lift with confidence intervals to the product owner.
+- Supported the migration of the reporting database to Snowflake and checked row counts after each load.
+- Scheduled nightly data refresh jobs in Airflow and wrote alerts for failed runs.
+
+Analytics Intern, Example Corp   Jun 2017 - Aug 2017
+- Cleaned survey data in Excel and produced charts for a customer satisfaction report.
+- Learned the basics of SQL by rewriting spreadsheet lookups as queries.
+
+EDUCATION
+B.Tech in Computer Science, Example Institute, 2018
+Relevant coursework: statistics, databases, machine learning, operating systems
+
+CERTIFICATIONS
+Example Cloud Practitioner
+
+PROJECTS
+Hospital wait time forecasting: a time series study comparing ARIMA and gradient boosting on public open data, written in Python with a short report on the results.
+Open data portal scraper: a Python script with scheduled refresh that stores the cleaned tables in PostgreSQL.
