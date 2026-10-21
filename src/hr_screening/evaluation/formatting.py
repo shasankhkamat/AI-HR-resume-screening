@@ -11,6 +11,35 @@ _KIND_LABELS = {
 }
 
 
+_RETRIEVAL_INTRO = (
+    "Found by keyword search. A passage is not evidence that a requirement is met, and it does "
+    "not change any status or the score. Read each one yourself."
+)
+_NO_PASSAGE = "No matching passage found. This does not show that the candidate lacks it."
+
+
+def _retrieval_lines(report: ScreeningReport) -> list[str]:
+    lines = ["", "RETRIEVED PASSAGES (for review)", _RETRIEVAL_INTRO]
+    for entry in report.retrieval:
+        lines.append(f"[{_KIND_LABELS[entry.kind]}] {entry.requirement}")
+        if entry.note:
+            lines.append(f"    {entry.note}")
+        elif not entry.passages:
+            lines.append(f"    {_NO_PASSAGE}")
+        for number, passage in enumerate(entry.passages, start=1):
+            facts = [
+                passage.section or "no section",
+                f"chars {passage.start}-{passage.end}",
+                f"relevance {passage.score:.2f}",
+            ]
+            if passage.mention_kinds:
+                kinds = ", ".join(dict.fromkeys(passage.mention_kinds))
+                facts.append(f"skill mentioned as: {kinds}")
+            lines.append(f"    Passage {number} ({'; '.join(facts)})")
+            lines += [f"        | {text}" for text in passage.text.splitlines()]
+    return lines
+
+
 def format_report_text(report: ScreeningReport) -> str:
     lines = [
         "SCREENING REPORT",
@@ -29,6 +58,8 @@ def format_report_text(report: ScreeningReport) -> str:
         lines += [f'    Evidence: "{e.snippet}"' for e in item.evidence]
     lines += ["", "NOT FOUND OR UNVERIFIED (check manually)"]
     lines += [f"- {a.requirement}: {a.status.value}" for a in report.unresolved] or ["- none"]
+    if report.retrieval:
+        lines += _retrieval_lines(report)
     lines += ["", "LIMITATIONS"]
     lines += [f"- {text}" for text in report.limitations]
     return "\n".join(lines)

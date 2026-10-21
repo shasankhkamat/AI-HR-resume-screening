@@ -17,6 +17,7 @@ from hr_screening.llm.base import LLMClient
 from hr_screening.llm.factory import build_llm_client
 from hr_screening.llm.ollama_client import base_url_is_local
 from hr_screening.logging_config import configure_logging
+from hr_screening.models.report import ScreeningReport
 from hr_screening.pipeline import screen_resume
 
 MAX_JOB_FILE_BYTES = 200_000
@@ -41,7 +42,22 @@ def _build_parser() -> argparse.ArgumentParser:
             "Resume text is sent to that server. If the model fails, rules are used instead."
         ),
     )
+    parser.add_argument(
+        "--rag",
+        choices=["lexical"],
+        help=(
+            "Opt in to listing resume passages for each requirement, found by local keyword "
+            "search. No network is used. Passages are for human review and do not change any "
+            "status or the score."
+        ),
+    )
     return parser
+
+
+def _report_json(report: ScreeningReport) -> str:
+    """The report as JSON. Without retrieval the output has no retrieval key, as before."""
+    exclude = None if report.retrieval else {"retrieval"}
+    return report.model_dump_json(indent=2, exclude=exclude)
 
 
 def _invalid_settings_message(exc: ValidationError) -> str:
@@ -97,11 +113,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         job_text = args.job_text if args.job_text is not None else _read_job_file(args.job_file)
         client = _build_client() if args.llm else None
-        report = screen_resume(args.resume, job_text, client=client, base_dir=args.resume_dir)
+        report = screen_resume(
+            args.resume, job_text, client=client, base_dir=args.resume_dir, rag_mode=args.rag
+        )
     except ScreeningError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
-    print(report.model_dump_json(indent=2) if args.json else format_report_text(report))
+    print(_report_json(report) if args.json else format_report_text(report))
     return 0
 
 

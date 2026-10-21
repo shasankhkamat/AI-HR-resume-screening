@@ -3,6 +3,7 @@
 import logging
 from datetime import date
 from pathlib import Path
+from typing import Literal
 
 from hr_screening.errors import (
     LLMConfigError,
@@ -21,12 +22,26 @@ from hr_screening.llm.base import LLMClient
 from hr_screening.llm.extractor import extract_profile_with_llm
 from hr_screening.models.candidate import CandidateProfile
 from hr_screening.models.report import ScreeningReport
+from hr_screening.rag.requirements import retrieve_for_assessments, verify_traceable
+from hr_screening.rag.retrieval import LexicalRetriever
 
 logger = logging.getLogger(__name__)
 
 LLM_SUCCESS_NOTE = (
     "A language model performed the extraction. Extracted items were checked to exist in the "
     "resume text. That check does not prove they are correct or mean what the model says."
+)
+RAG_MODES = ("lexical",)
+RETRIEVAL_NOTE = (
+    "Retrieved passages come from a keyword search over the resume. A passage is not evidence "
+    "that a requirement is met, and the search can miss text that uses different words."
+)
+RETRIEVAL_TRUNCATED_NOTE = (
+    "The resume is very long, so only its first part was searched for passages."
+)
+RETRIEVAL_FAILED_NOTE = (
+    "Passage retrieval failed, so this report has no retrieved passages. "
+    "The statuses and the score are not affected."
 )
 _FAILURE_REASONS = (
     (LLMTimeoutError, "the model did not answer in time"),
@@ -52,13 +67,20 @@ def screen_resume(
     client: LLMClient | None = None,
     base_dir: str | Path | None = None,
     today: date | None = None,
+    rag_mode: Literal["lexical"] | None = None,
 ) -> ScreeningReport:
     """Screen one resume against one job description.
 
     If a client is given and it fails or returns something invalid, the rule based
     parser is used instead and the report says so. A configuration error is not an
     operational failure, so it is raised instead of hidden.
+
+    With ``rag_mode="lexical"`` the report also lists resume passages for each requirement.
+    They are added after evaluation, so statuses and the score are exactly the same as
+    without them.
     """
+    if rag_mode is not None and rag_mode not in RAG_MODES:
+        raise ValueError(f"rag_mode must be one of {RAG_MODES} or None.")
     resume_text = load_resume_text(resume_path, base_dir=base_dir)
     requirements = parse_job_description(job_description)
 
@@ -77,4 +99,30 @@ def screen_resume(
             notes.append(_fallback_note(exc))
     if profile is None:
         profile = parse_resume(resume_text, today=today)
-    return evaluate(profile, requirements, resume_text, extra_limitations=notes)
+    report = evaluate(profile, requirements, resume_text, extra_limitations=notes)
+    if rag_mode == "lexical":
+        report = _add_retrieval(report, resume_text)
+    return report
+
+
+def _add_retrieval(report: ScreeningReport, resume_text: str) -> ScreeningReport:
+    """Attach retrieved passages. Only ``retrieval`` and ``limitations`` are changed.
+
+    Retrieval is an optional extra. If it fails for any reason, screening continues without
+    it and the report says so. Only the error class name is logged, never resume text.
+    """
+    try:
+        retriever = LexicalRetriever(resume_text)
+        entries = retrieve_for_assessments(retriever, report.assessments)
+        verify_traceable(entries, resume_text)
+    except Exception as exc:
+        logger.warning(
+            "Retrieval failed (%s); the report has no retrieved passages", type(exc).__name__
+        )
+        limitations = [*report.limitations, RETRIEVAL_FAILED_NOTE]
+        return report.model_copy(update={"limitations": limitations})
+    notes = [RETRIEVAL_NOTE]
+    if retriever.truncated:
+        notes.append(RETRIEVAL_TRUNCATED_NOTE)
+    limitations = [*report.limitations, *notes]
+    return report.model_copy(update={"retrieval": entries, "limitations": limitations})
